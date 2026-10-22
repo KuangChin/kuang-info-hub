@@ -21,7 +21,7 @@ const sources: Source[] = [
   { name: "OpenAI", category: "world", url: "https://openai.com/news/rss.xml", tags: ["AI 技術", "模型更新", "OpenAI"] },
   { name: "arXiv AI", category: "world", url: "https://export.arxiv.org/rss/cs.AI", tags: ["AI 論文", "研究", "arXiv"] },
   { name: "arXiv Machine Learning", category: "world", url: "https://export.arxiv.org/rss/cs.LG", tags: ["機器學習", "論文", "arXiv"] },
-  { name: "迷因趨勢", category: "social", url: "https://news.google.com/rss/search?q=%E7%A4%BE%E7%BE%A4%20%E7%86%B1%E9%96%80%20%E8%BF%B7%E5%9B%A0&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["社群", "迷因"] }
+  { name: "迷因趨勢", category: "social", url: "https://news.google.com/rss/search?q=%28%22%E7%A4%BE%E7%BE%A4%E7%82%B8%E9%8D%8B%22+OR+%22%E7%B6%B2%E8%B7%AF%E7%86%B1%E8%AD%B0%22+OR+%22%E8%BF%B7%E5%9B%A0%22%29+when%3A3d&hl=zh-TW&gl=TW&ceid=TW%3Azh-Hant", tags: ["社群", "迷因"] }
 ];
 
 const parser = new XMLParser({ ignoreAttributes: false });
@@ -49,7 +49,9 @@ async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]
   });
   if (!response.ok) throw new Error(`${source.name}: ${response.status}`);
   const parsed = parser.parse(await response.text());
-  const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item).slice(0, 8);
+  const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item)
+    .sort((left, right) => +new Date(right.pubDate || 0) - +new Date(left.pubDate || 0))
+    .slice(0, 8);
   const originalDates = await resolveGoogleNewsDates(items.map((item) => item.link || ""));
   return items.map((item, index) => ({
     id: createItemId(source, item.link || "", index),
