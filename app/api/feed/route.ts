@@ -41,9 +41,9 @@ function createItemId(source: Source, link: string, index: number) {
   return `${source.category}-${hash}`;
 }
 
-async function collect(source: Source): Promise<FeedItem[]> {
+async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]> {
   const response = await fetch(source.url, {
-    next: { revalidate: 600 },
+    ...(forceRefresh ? { cache: "no-store" as const } : { next: { revalidate: 600 } }),
     headers: { "User-Agent": "KuangInfoHub/0.1 (+personal news dashboard)" },
     signal: AbortSignal.timeout(7000)
   });
@@ -67,8 +67,9 @@ async function collect(source: Source): Promise<FeedItem[]> {
 
 export async function GET(request: NextRequest) {
   const category = request.nextUrl.searchParams.get("category");
+  const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
   const selected = category && category !== "all" ? sources.filter((s) => s.category === category) : sources;
-  const settled = await Promise.allSettled(selected.map(collect));
+  const settled = await Promise.allSettled(selected.map((source) => collect(source, forceRefresh)));
   const live = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const fallback = category && category !== "all" ? demoFeed.filter((item) => item.category === category) : demoFeed;
   const rawItems = live.length ? live : fallback;

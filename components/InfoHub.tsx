@@ -158,10 +158,10 @@ export default function InfoHub() {
     notification.onclick = () => { window.focus(); notification.close(); };
   }
 
-  async function loadMarket() {
+  async function loadMarket(forceRefresh = false) {
     setMarketLoading(true);
     try {
-      const response = await fetch("/api/market", { cache: "no-store" });
+      const response = await fetch(forceRefresh ? "/api/market?refresh=1" : "/api/market", { cache: "no-store" });
       const data = await response.json();
       setQuotes(Array.isArray(data.quotes) ? data.quotes : []);
       setMarketFailedSources(Array.isArray(data.failedSources) ? data.failedSources : []);
@@ -176,9 +176,9 @@ export default function InfoHub() {
     setLoading(true);
     try {
       const [response, customItems] = await Promise.all([
-        fetch("/api/feed", { cache: "no-store" }),
+        fetch("/api/feed?refresh=1", { cache: "no-store" }),
         fetchCustomSources(customSources),
-        loadMarket()
+        loadMarket(true)
       ]);
       const data = await response.json();
       const items = Array.isArray(data.items) && data.items.length ? data.items as FeedItem[] : demoFeed;
@@ -424,7 +424,7 @@ export default function InfoHub() {
           </section>
 
           <section className="feed-section">
-            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : `依發布時間顯示最新 10 篇${feedbackCount ? ` · 已記錄 ${feedbackCount} 次回饋` : ""}`}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "重新整理"}</button></div>
+            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : `依發布時間顯示最新 10 篇${feedbackCount ? ` · 已記錄 ${feedbackCount} 次回饋` : ""}`}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "即時更新"}</button></div>
             <div className="filter-row">{categories.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}>{item.label}</button>)}</div>
             <div className="feed-layout">
               <div className="feed-list">{visibleFeed.length ? visibleFeed.map((item) => {

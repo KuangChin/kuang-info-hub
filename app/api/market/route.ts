@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type { MarketQuote } from "@/lib/types";
 
 export const revalidate = 60;
@@ -43,9 +43,9 @@ function currentTaipeiDate() {
   }).format(new Date()).replaceAll("-", "");
 }
 
-async function fetchJson<T>(url: string, headers?: HeadersInit): Promise<T> {
+async function fetchJson<T>(url: string, headers?: HeadersInit, forceRefresh = false): Promise<T> {
   const response = await fetch(url, {
-    next: { revalidate: 60 },
+    ...(forceRefresh ? { cache: "no-store" as const } : { next: { revalidate: 60 } }),
     headers,
     signal: AbortSignal.timeout(8000)
   });
@@ -53,12 +53,12 @@ async function fetchJson<T>(url: string, headers?: HeadersInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function twseHistory(symbol: string, date: string) {
+async function twseHistory(symbol: string, date: string, forceRefresh: boolean) {
   const isIndex = symbol === "TAIEX";
   const url = isIndex
     ? `https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date=${date}&response=json`
     : `https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=${date}&stockNo=${symbol}`;
-  const data = await fetchJson<{ data?: string[][] }>(url);
+  const data = await fetchJson<{ data?: string[][] }>(url, undefined, forceRefresh);
   const closeColumn = isIndex ? 4 : 6;
   const values = (data.data || [])
     .map((row) => numberOf(row[closeColumn]))
@@ -67,16 +67,16 @@ async function twseHistory(symbol: string, date: string) {
   return values.length >= 2 ? values : undefined;
 }
 
-async function fetchTwseQuotes(date: string): Promise<MarketQuote[]> {
+async function fetchTwseQuotes(date: string, forceRefresh: boolean): Promise<MarketQuote[]> {
   const channels = ["tse_t00.tw", ...twseSymbols.map((symbol) => `tse_${symbol}.tw`)].join("|");
   const endpoint = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(channels)}&json=1&delay=0`;
   const data = await fetchJson<{ msgArray?: TwseMessage[] }>(endpoint, {
     "User-Agent": "Mozilla/5.0 (compatible; KuangInfoHub/1.0)"
-  });
+  }, forceRefresh);
   const messages = data.msgArray || [];
   const histories = await Promise.allSettled([
-    twseHistory("TAIEX", date),
-    ...twseSymbols.map((symbol) => twseHistory(symbol, date))
+    twseHistory("TAIEX", date, forceRefresh),
+    ...twseSymbols.map((symbol) => twseHistory(symbol, date, forceRefresh))
   ]);
 
   return messages.flatMap((message, index) => {
@@ -104,13 +104,14 @@ async function fetchTwseQuotes(date: string): Promise<MarketQuote[]> {
   });
 }
 
-async function fetchNasdaqQuote(symbol: string): Promise<MarketQuote> {
+async function fetchNasdaqQuote(symbol: string, forceRefresh: boolean): Promise<MarketQuote> {
   const data = await fetchJson<NasdaqChart>(
     `https://api.nasdaq.com/api/quote/${symbol}/chart?assetclass=stocks`,
     {
       "User-Agent": "Mozilla/5.0",
       "Accept": "application/json, text/plain, */*"
-    }
+    },
+    forceRefresh
   );
   const quote = data.data;
   const price = numberOf(quote?.lastSalePrice);
@@ -136,11 +137,12 @@ async function fetchNasdaqQuote(symbol: string): Promise<MarketQuote> {
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
   const date = currentTaipeiDate();
   const [twseResult, ...nasdaqResults] = await Promise.allSettled([
-    fetchTwseQuotes(date),
-    ...nasdaqSymbols.map(fetchNasdaqQuote)
+    fetchTwseQuotes(date, forceRefresh),
+    ...nasdaqSymbols.map((symbol) => fetchNasdaqQuote(symbol, forceRefresh))
   ]);
   const quotes = [
     ...(twseResult.status === "fulfilled" ? twseResult.value : []),
