@@ -15,6 +15,11 @@ const sources: Source[] = [
   { name: "NBA", category: "nba", url: "https://news.google.com/rss/search?q=NBA&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["NBA", "籃球"] },
   { name: "MMORPG", category: "gaming", url: "https://news.google.com/rss/search?q=MMORPG&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["MMORPG", "遊戲"] },
   { name: "全球 AI", category: "world", url: "https://news.google.com/rss/search?q=%E5%85%A8%E7%90%83%20AI%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E6%85%A7%20when%3A7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["AI", "國際", "人工智慧"] },
+  { name: "Hugging Face", category: "world", url: "https://huggingface.co/blog/feed.xml", tags: ["AI 技術", "開源模型", "Hugging Face"] },
+  { name: "Google DeepMind", category: "world", url: "https://deepmind.google/blog/rss.xml", tags: ["AI 研究", "前沿技術", "DeepMind"] },
+  { name: "OpenAI", category: "world", url: "https://openai.com/news/rss.xml", tags: ["AI 技術", "模型更新", "OpenAI"] },
+  { name: "arXiv AI", category: "world", url: "https://export.arxiv.org/rss/cs.AI", tags: ["AI 論文", "研究", "arXiv"] },
+  { name: "arXiv Machine Learning", category: "world", url: "https://export.arxiv.org/rss/cs.LG", tags: ["機器學習", "論文", "arXiv"] },
   { name: "迷因趨勢", category: "social", url: "https://news.google.com/rss/search?q=%E7%A4%BE%E7%BE%A4%20%E7%86%B1%E9%96%80%20%E8%BF%B7%E5%9B%A0&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["社群", "迷因"] }
 ];
 

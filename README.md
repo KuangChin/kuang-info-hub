@@ -5,6 +5,7 @@
 ## 目前功能
 
 - 六大情報分類與即時 RSS 聚合
+- AI 技術來源：Hugging Face、Google DeepMind、OpenAI 與 arXiv AI／機器學習
 - 關鍵字搜尋與分類篩選
 - 自選市場快照（台股取自 TWSE、美股取自 NASDAQ，顯示來源與更新時間）
 - 新聞收藏（瀏覽器 localStorage）
