@@ -4,10 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut, ArrowsClockwise, Basketball, Bell, BookmarkSimple, ChartLineUp,
   Check, Clock, Fire, GameController, GlobeHemisphereWest, House, MagnifyingGlass,
-  Newspaper, Plus, SlidersHorizontal, Sparkle, TrendUp, WifiHigh, X
+  Newspaper, Plus, SlidersHorizontal, Sparkle, ThumbsDown, ThumbsUp, TrendUp, WifiHigh, X
 } from "@phosphor-icons/react";
 import { demoFeed } from "@/lib/demo-data";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
+import {
+  createFeedbackEntry, isFeedFeedback, rankFeedByPreferences,
+  type FeedbackValue, type FeedFeedback
+} from "@/lib/feed-preferences";
 import type { CustomSource, FeedCategory, FeedItem, MarketQuote } from "@/lib/types";
 import { Sparkline } from "./Sparkline";
 
@@ -80,6 +84,7 @@ export default function InfoHub() {
   const [marketFailedSources, setMarketFailedSources] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [bookmarks, setBookmarks] = useState<string[]>([]);
+  const [feedback, setFeedback] = useState<FeedFeedback>({});
   const [bookmarkedOnly, setBookmarkedOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"live" | "demo">("demo");
@@ -183,11 +188,14 @@ export default function InfoHub() {
   useEffect(() => {
     let savedSources: CustomSource[] = [];
     let savedBookmarks: string[] = [];
+    let savedFeedback: FeedFeedback = {};
     let restoredSymbols: string[] | undefined;
     let savedNotifications: NotificationSettings | undefined;
     try {
       const parsedBookmarks = JSON.parse(localStorage.getItem("kuang-bookmarks") || "[]");
       if (Array.isArray(parsedBookmarks)) savedBookmarks = parsedBookmarks;
+      const parsedFeedback = JSON.parse(localStorage.getItem("kuang-feed-feedback") || "{}");
+      if (isFeedFeedback(parsedFeedback)) savedFeedback = parsedFeedback;
       const storedSymbols = localStorage.getItem("kuang-market-symbols");
       const savedSymbols = storedSymbols === null ? undefined : JSON.parse(storedSymbols);
       if (Array.isArray(savedSymbols) && savedSymbols.every((symbol) => typeof symbol === "string")) {
@@ -207,6 +215,7 @@ export default function InfoHub() {
     const restoredSources = savedSources;
     const restoreTimer = window.setTimeout(() => {
       setBookmarks(savedBookmarks);
+      setFeedback(savedFeedback);
       if (restoredSymbols) setSelectedSymbols(restoredSymbols);
       setCustomSources(restoredSources);
       if (savedNotifications) setNotificationSettings(savedNotifications);
@@ -244,6 +253,19 @@ export default function InfoHub() {
     setBookmarks((current) => {
       const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
       localStorage.setItem("kuang-bookmarks", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function rateItem(item: FeedItem, value: FeedbackValue) {
+    setFeedback((current) => {
+      const next = { ...current };
+      if (next[item.id]?.value === value) {
+        delete next[item.id];
+      } else {
+        next[item.id] = createFeedbackEntry(item, value);
+      }
+      localStorage.setItem("kuang-feed-feedback", JSON.stringify(next));
       return next;
     });
   }
@@ -313,13 +335,17 @@ export default function InfoHub() {
     localStorage.setItem("kuang-custom-sources", JSON.stringify(nextSources));
   }
 
-  const visibleFeed = useMemo(() => feed.filter((item) => {
-    const categoryMatch = active === "all" || item.category === active;
-    const bookmarkMatch = !bookmarkedOnly || bookmarks.includes(item.id);
-    const q = query.trim().toLowerCase();
-    const queryMatch = !q || [item.title, item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
-    return categoryMatch && bookmarkMatch && queryMatch;
-  }), [feed, active, query, bookmarkedOnly, bookmarks]);
+  const visibleFeed = useMemo(() => {
+    const filtered = feed.filter((item) => {
+      const categoryMatch = active === "all" || item.category === active;
+      const bookmarkMatch = !bookmarkedOnly || bookmarks.includes(item.id);
+      const q = query.trim().toLowerCase();
+      const queryMatch = !q || [item.title, item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
+      return categoryMatch && bookmarkMatch && queryMatch;
+    });
+    return rankFeedByPreferences(filtered, feedback).slice(0, 10);
+  }, [feed, active, query, bookmarkedOnly, bookmarks, feedback]);
+  const feedbackCount = Object.keys(feedback).length;
   const selectedQuotes = useMemo(() => selectedSymbols.flatMap((symbol) => {
     const quote = quotes.find((item) => item.symbol === symbol);
     return quote ? [quote] : [];
@@ -385,15 +411,15 @@ export default function InfoHub() {
           </section>
 
           <section className="feed-section">
-            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "只顯示你收藏的情報" : "依照關注主題與重要性排序"}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "重新整理"}</button></div>
+            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : `顯示最符合的前 10 篇${feedbackCount ? ` · 已學習 ${feedbackCount} 次回饋` : " · 回饋後會自動調整"}`}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "重新整理"}</button></div>
             <div className="filter-row">{categories.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}>{item.label}</button>)}</div>
             <div className="feed-layout">
               <div className="feed-list">{visibleFeed.length ? visibleFeed.map((item) => {
-                const meta = categoryMeta[item.category]; const saved = bookmarks.includes(item.id); const articleUrl = originalArticleUrl(item.url);
+                const meta = categoryMeta[item.category]; const saved = bookmarks.includes(item.id); const articleUrl = originalArticleUrl(item.url); const rating = feedback[item.id]?.value;
                 return <article className="feed-card" key={`${item.category}:${item.id}:${item.url}`}><div className="feed-accent" data-category={item.category} /><div className="feed-content">
                   <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock />{timeAgo(item.publishedAt)}</span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}</div>
                   <a href={articleUrl} target="_blank" rel="noreferrer"><h3>{item.title}</h3></a><p>{item.summary}</p>
-                  <div className="feed-footer"><div className="tags">{item.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div><div className="card-actions"><span className="relevance">{item.relevance}% 相關</span><button onClick={() => toggleBookmark(item.id)} className={saved ? "saved" : ""} aria-label="收藏">{saved ? <BookmarkSimple weight="fill" /> : <BookmarkSimple />}</button><a href={articleUrl} target="_blank" rel="noreferrer" aria-label="開啟原文"><ArrowSquareOut /></a></div></div>
+                  <div className="feed-footer"><div className="tags">{item.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div><div className="card-actions"><span className="relevance">{item.relevance}% 相關</span><span className="feedback-actions" aria-label="偏好回饋"><button onClick={() => rateItem(item, 1)} className={rating === 1 ? "liked" : ""} aria-label="這篇有命中我的喜好" title="有命中"><ThumbsUp weight={rating === 1 ? "fill" : "regular"} /></button><button onClick={() => rateItem(item, -1)} className={rating === -1 ? "disliked" : ""} aria-label="這篇沒有命中我的喜好" title="沒命中"><ThumbsDown weight={rating === -1 ? "fill" : "regular"} /></button></span><button onClick={() => toggleBookmark(item.id)} className={saved ? "saved" : ""} aria-label="收藏">{saved ? <BookmarkSimple weight="fill" /> : <BookmarkSimple />}</button><a href={articleUrl} target="_blank" rel="noreferrer" aria-label="開啟原文"><ArrowSquareOut /></a></div></div>
                   {item.reason && <div className="reason"><Sparkle weight="fill" /><span>{item.reason}</span></div>}
                 </div></article>;
               }) : <div className="empty"><MagnifyingGlass /><h3>找不到符合的情報</h3><p>試試其他關鍵字、分類，或先收藏幾則情報。</p></div>}</div>
@@ -413,6 +439,7 @@ export default function InfoHub() {
           <div><span>內建新聞來源</span><strong>{sourceCount} 個可用</strong></div>
           <div><span>自訂來源</span><strong>{customSources.length} 個</strong></div>
           <div><span>已過濾重複新聞</span><strong>{duplicateCount} 則</strong></div>
+          <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
           <div><span>市場來源</span><strong className={marketFailedSources.length ? "warn" : "good"}>{marketFailedSources.length ? `異常：${marketFailedSources.join("、")}` : "TWSE、NASDAQ 正常"}</strong></div>
         </div>
         <p className="dialog-note">最後更新：{quoteTime(updatedAt)}。來源讀取失敗時，新聞才會切換到展示備援；股票不會顯示估算價格。</p>
