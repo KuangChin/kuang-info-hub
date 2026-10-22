@@ -41,6 +41,40 @@ function createItemId(source: Source, link: string, index: number) {
   return `${source.category}-${hash}`;
 }
 
+function arxivId(value: string) {
+  try {
+    const match = new URL(value).pathname.match(/\/abs\/([^/]+)/);
+    return match?.[1]?.replace(/v\d+$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveArxivDates(items: Array<Record<string, string>>, forceRefresh: boolean) {
+  const ids = items.map((item) => arxivId(item.link || "")).filter((id): id is string => !!id);
+  const dates = new Map<string, string>();
+  if (!ids.length) return dates;
+
+  try {
+    const response = await fetch(`https://export.arxiv.org/api/query?id_list=${encodeURIComponent(ids.join(","))}`, {
+      ...(forceRefresh ? { cache: "no-store" as const } : { next: { revalidate: 600 } }),
+      headers: { "User-Agent": "KuangInfoHub/0.1 (+personal news dashboard)" },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) return dates;
+    const parsed = parser.parse(await response.text());
+    const entries = arrayOf<Record<string, string>>(parsed?.feed?.entry);
+    entries.forEach((entry) => {
+      const id = arxivId(entry.id || "");
+      const published = new Date(entry.published || "");
+      if (id && !Number.isNaN(published.getTime())) dates.set(id, published.toISOString());
+    });
+  } catch {
+    // arXiv API 暫時無法讀取時，保留 RSS 的公告日期。
+  }
+  return dates;
+}
+
 async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]> {
   const response = await fetch(source.url, {
     ...(forceRefresh ? { cache: "no-store" as const } : { next: { revalidate: 600 } }),
@@ -52,7 +86,10 @@ async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]
   const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item)
     .sort((left, right) => +new Date(right.pubDate || 0) - +new Date(left.pubDate || 0))
     .slice(0, 8);
-  const originalDates = await resolveGoogleNewsDates(items.map((item) => item.link || ""));
+  const [originalDates, arxivDates] = await Promise.all([
+    resolveGoogleNewsDates(items.map((item) => item.link || "")),
+    resolveArxivDates(items, forceRefresh)
+  ]);
   return items.map((item, index) => ({
     id: createItemId(source, item.link || "", index),
     category: source.category,
@@ -60,7 +97,9 @@ async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]
     title: cleanTitle(item.title || "未命名情報"),
     summary: `來自${source.name}的最新內容，點擊前往原始來源閱讀全文。`,
     url: item.link || "#",
-    publishedAt: originalDates.get(item.link || "") || new Date(item.pubDate || Date.now()).toISOString(),
+    publishedAt: originalDates.get(item.link || "") ||
+      arxivDates.get(arxivId(item.link || "") || "") ||
+      new Date(item.pubDate || Date.now()).toISOString(),
     tags: source.tags,
     relevance: Math.max(58, 92 - index * 4),
     reason: `符合你追蹤的「${source.tags[0]}」主題`
