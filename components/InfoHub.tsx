@@ -36,12 +36,23 @@ type Dialog = "status" | "notifications" | "sources" | null;
 
 type NotificationSettings = { enabled: boolean; keywords: string };
 
-function timeAgo(date: string) {
-  const seconds = Math.max(0, (Date.now() - new Date(date).getTime()) / 1000);
-  if (seconds < 60) return "剛剛";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分鐘前`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小時前`;
-  return `${Math.floor(seconds / 86400)} 天前`;
+function articleTime(date: string, referenceDate: string) {
+  const published = new Date(date);
+  const reference = new Date(referenceDate);
+  if (Number.isNaN(published.getTime())) return { label: "時間未知", exact: date };
+  const referenceTime = Number.isNaN(reference.getTime()) ? Date.now() : reference.getTime();
+  const seconds = Math.max(0, (referenceTime - published.getTime()) / 1000);
+  const exact = new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false
+  }).format(published);
+  if (seconds < 60) return { label: "剛剛", exact };
+  if (seconds < 3600) return { label: `${Math.floor(seconds / 60)} 分鐘前`, exact };
+  if (seconds < 86400) return { label: `${Math.floor(seconds / 3600)} 小時前`, exact };
+  const calendarDate = new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei", month: "numeric", day: "numeric"
+  }).format(published);
+  return { label: `${calendarDate} · ${Math.floor(seconds / 86400)} 天前`, exact };
 }
 
 function originalArticleUrl(url: string) {
@@ -415,9 +426,9 @@ export default function InfoHub() {
             <div className="filter-row">{categories.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}>{item.label}</button>)}</div>
             <div className="feed-layout">
               <div className="feed-list">{visibleFeed.length ? visibleFeed.map((item) => {
-                const meta = categoryMeta[item.category]; const saved = bookmarks.includes(item.id); const articleUrl = originalArticleUrl(item.url); const rating = feedback[item.id]?.value;
+                const meta = categoryMeta[item.category]; const saved = bookmarks.includes(item.id); const articleUrl = originalArticleUrl(item.url); const rating = feedback[item.id]?.value; const published = articleTime(item.publishedAt, updatedAt);
                 return <article className="feed-card" key={`${item.category}:${item.id}:${item.url}`}><div className="feed-accent" data-category={item.category} /><div className="feed-content">
-                  <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock />{timeAgo(item.publishedAt)}</span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}</div>
+                  <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock /><time dateTime={item.publishedAt} title={published.exact}>{published.label}</time></span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}</div>
                   <a href={articleUrl} target="_blank" rel="noreferrer"><h3>{item.title}</h3></a><p>{item.summary}</p>
                   <div className="feed-footer"><div className="tags">{item.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div><div className="card-actions"><span className="relevance">{item.relevance}% 相關</span><span className="feedback-actions" aria-label="偏好回饋"><button onClick={() => rateItem(item, 1)} className={rating === 1 ? "liked" : ""} aria-label="這篇有命中我的喜好" title="有命中"><ThumbsUp weight={rating === 1 ? "fill" : "regular"} /></button><button onClick={() => rateItem(item, -1)} className={rating === -1 ? "disliked" : ""} aria-label="這篇沒有命中我的喜好" title="沒命中"><ThumbsDown weight={rating === -1 ? "fill" : "regular"} /></button></span><button onClick={() => toggleBookmark(item.id)} className={saved ? "saved" : ""} aria-label="收藏">{saved ? <BookmarkSimple weight="fill" /> : <BookmarkSimple />}</button><a href={articleUrl} target="_blank" rel="noreferrer" aria-label="開啟原文"><ArrowSquareOut /></a></div></div>
                   {item.reason && <div className="reason"><Sparkle weight="fill" /><span>{item.reason}</span></div>}
