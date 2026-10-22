@@ -1,4 +1,4 @@
-import type { FeedItem, MarketQuote } from "./types";
+import type { FeedItem } from "./types";
 
 const now = Date.now();
 const minsAgo = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
@@ -68,20 +68,13 @@ export const demoFeed: FeedItem[] = [
   {
     id: "demo-world-1",
     category: "world",
-    source: "世界新聞",
-    title: "國際市場關注地緣政治與全球供應鏈發展",
-    summary: "重要國際事件持續影響能源、匯率與風險性資產走勢。",
-    url: "https://www.reuters.com/world/",
+    source: "全球 AI",
+    title: "全球 AI 產業聚焦新模型、算力建設與監管進展",
+    summary: "掌握國際人工智慧公司的產品更新、晶片與資料中心投資，以及各國政策動態。",
+    url: "https://www.reuters.com/technology/artificial-intelligence/",
     publishedAt: minsAgo(138),
-    tags: ["國際", "供應鏈"],
+    tags: ["AI", "人工智慧", "國際"],
     relevance: 68,
-    reason: "可能影響你的持股"
+    reason: "符合你追蹤的「AI」主題"
   }
-];
-
-export const demoQuotes: MarketQuote[] = [
-  { symbol: "TAIEX", name: "台灣加權", price: 27648.31, change: 128.42, changePercent: 0.47, sparkline: [44, 43, 47, 46, 51, 53, 56, 55, 61, 64] },
-  { symbol: "2330", name: "台積電", price: 1485, change: 20, changePercent: 1.37, sparkline: [40, 43, 41, 47, 49, 53, 52, 58, 61, 66] },
-  { symbol: "2454", name: "聯發科", price: 1340, change: -15, changePercent: -1.11, sparkline: [64, 62, 65, 59, 57, 54, 56, 51, 48, 46] },
-  { symbol: "NVDA", name: "NVIDIA", price: 188.6, change: 2.84, changePercent: 1.53, sparkline: [43, 47, 45, 49, 54, 52, 58, 62, 60, 68] }
 ];

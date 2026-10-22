@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
+import { createHash } from "node:crypto";
 import { demoFeed } from "@/lib/demo-data";
+import { deduplicateFeedItems } from "@/lib/feed-dedupe";
 import type { FeedCategory, FeedItem } from "@/lib/types";
 
 export const revalidate = 600;
@@ -12,7 +14,7 @@ const sources: Source[] = [
   { name: "全球財經", category: "finance", url: "https://news.google.com/rss/search?q=%E5%85%A8%E7%90%83%20%E8%B2%A1%E7%B6%93&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["財經", "市場"] },
   { name: "NBA", category: "nba", url: "https://news.google.com/rss/search?q=NBA&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["NBA", "籃球"] },
   { name: "MMORPG", category: "gaming", url: "https://news.google.com/rss/search?q=MMORPG&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["MMORPG", "遊戲"] },
-  { name: "世界新聞", category: "world", url: "https://news.google.com/rss/search?q=%E5%9C%8B%E9%9A%9B%20%E9%87%8D%E8%A6%81%E6%96%B0%E8%81%9E&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["國際"] },
+  { name: "全球 AI", category: "world", url: "https://news.google.com/rss/search?q=%E5%85%A8%E7%90%83%20AI%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E6%85%A7%20when%3A7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["AI", "國際", "人工智慧"] },
   { name: "迷因趨勢", category: "social", url: "https://news.google.com/rss/search?q=%E7%A4%BE%E7%BE%A4%20%E7%86%B1%E9%96%80%20%E8%BF%B7%E5%9B%A0&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["社群", "迷因"] }
 ];
 
@@ -27,6 +29,12 @@ function cleanTitle(value: string) {
   return value.replace(/\s+-\s+[^-]+$/, "").trim();
 }
 
+function createItemId(source: Source, link: string, index: number) {
+  const identity = link || `${source.url}#${index}`;
+  const hash = createHash("sha256").update(identity).digest("base64url").slice(0, 24);
+  return `${source.category}-${hash}`;
+}
+
 async function collect(source: Source): Promise<FeedItem[]> {
   const response = await fetch(source.url, {
     next: { revalidate: 600 },
@@ -37,7 +45,7 @@ async function collect(source: Source): Promise<FeedItem[]> {
   const parsed = parser.parse(await response.text());
   const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item).slice(0, 8);
   return items.map((item, index) => ({
-    id: `${source.category}-${Buffer.from(item.link || `${index}`).toString("base64url").slice(0, 24)}`,
+    id: createItemId(source, item.link || "", index),
     category: source.category,
     source: source.name,
     title: cleanTitle(item.title || "未命名情報"),
@@ -56,12 +64,14 @@ export async function GET(request: NextRequest) {
   const settled = await Promise.allSettled(selected.map(collect));
   const live = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const fallback = category && category !== "all" ? demoFeed.filter((item) => item.category === category) : demoFeed;
-  const items = (live.length ? live : fallback).sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
+  const rawItems = live.length ? live : fallback;
+  const items = deduplicateFeedItems(rawItems);
 
   return NextResponse.json({
     items,
     mode: live.length ? "live" : "demo",
     updatedAt: new Date().toISOString(),
-    sourceCount: settled.filter((result) => result.status === "fulfilled").length
+    sourceCount: settled.filter((result) => result.status === "fulfilled").length,
+    duplicateCount: rawItems.length - items.length
   });
 }
