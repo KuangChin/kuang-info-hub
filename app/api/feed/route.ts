@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import { demoFeed } from "@/lib/demo-data";
+import { resolveGoogleNewsDates } from "@/lib/article-date";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
 import type { FeedCategory, FeedItem } from "@/lib/types";
 
@@ -49,6 +50,7 @@ async function collect(source: Source): Promise<FeedItem[]> {
   if (!response.ok) throw new Error(`${source.name}: ${response.status}`);
   const parsed = parser.parse(await response.text());
   const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item).slice(0, 8);
+  const originalDates = await resolveGoogleNewsDates(items.map((item) => item.link || ""));
   return items.map((item, index) => ({
     id: createItemId(source, item.link || "", index),
     category: source.category,
@@ -56,7 +58,7 @@ async function collect(source: Source): Promise<FeedItem[]> {
     title: cleanTitle(item.title || "未命名情報"),
     summary: `來自${source.name}的最新內容，點擊前往原始來源閱讀全文。`,
     url: item.link || "#",
-    publishedAt: new Date(item.pubDate || Date.now()).toISOString(),
+    publishedAt: originalDates.get(item.link || "") || new Date(item.pubDate || Date.now()).toISOString(),
     tags: source.tags,
     relevance: Math.max(58, 92 - index * 4),
     reason: `符合你追蹤的「${source.tags[0]}」主題`
