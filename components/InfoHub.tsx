@@ -9,7 +9,7 @@ import {
 import { demoFeed } from "@/lib/demo-data";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
 import {
-  createFeedbackEntry, isFeedFeedback, rankFeedByPreferences,
+  createFeedbackEntry, isFeedFeedback,
   type FeedbackValue, type FeedFeedback
 } from "@/lib/feed-preferences";
 import type { CustomSource, FeedCategory, FeedItem, MarketQuote } from "@/lib/types";
@@ -354,8 +354,10 @@ export default function InfoHub() {
       const queryMatch = !q || [item.title, item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
       return categoryMatch && bookmarkMatch && queryMatch;
     });
-    return rankFeedByPreferences(filtered, feedback).slice(0, 10);
-  }, [feed, active, query, bookmarkedOnly, bookmarks, feedback]);
+    return filtered
+      .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
+      .slice(0, 10);
+  }, [feed, active, query, bookmarkedOnly, bookmarks]);
   const feedbackCount = Object.keys(feedback).length;
   const selectedQuotes = useMemo(() => selectedSymbols.flatMap((symbol) => {
     const quote = quotes.find((item) => item.symbol === symbol);
@@ -422,7 +424,7 @@ export default function InfoHub() {
           </section>
 
           <section className="feed-section">
-            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : `顯示最符合的前 10 篇${feedbackCount ? ` · 已學習 ${feedbackCount} 次回饋` : " · 回饋後會自動調整"}`}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "重新整理"}</button></div>
+            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : `依發布時間顯示最新 10 篇${feedbackCount ? ` · 已記錄 ${feedbackCount} 次回饋` : ""}`}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "重新整理"}</button></div>
             <div className="filter-row">{categories.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}>{item.label}</button>)}</div>
             <div className="feed-layout">
               <div className="feed-list">{visibleFeed.length ? visibleFeed.map((item) => {
