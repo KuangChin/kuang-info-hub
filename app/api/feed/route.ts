@@ -1,14 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import { demoFeed } from "@/lib/demo-data";
 import { resolveGoogleNewsDates } from "@/lib/article-date";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
+import { aiSummaryEnabled, attachSummaries, isMostlyEnglish, stripHtml, type SummaryInput } from "@/lib/ai-summary";
 import type { FeedCategory, FeedItem } from "@/lib/types";
 
 export const revalidate = 600;
+// 留時間給背景摘要（after）完成並寫入快取。
+export const maxDuration = 60;
+
+/** 等待 AI 摘要的最長時間；來不及的會在背景完成，下次載入就看得到。 */
+const summaryBudgetMs = 3500;
 
 type Source = { name: string; category: FeedCategory; url: string; tags: string[] };
+type CollectedItem = FeedItem & { excerpt: string };
 
 const sources: Source[] = [
   { name: "台股新聞", category: "market", url: "https://news.google.com/rss/search?q=%E5%8F%B0%E8%82%A1%20%E7%9B%A4%E5%8B%A2&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["台股", "盤勢"] },
@@ -29,6 +36,15 @@ const parser = new XMLParser({ ignoreAttributes: false });
 function arrayOf<T>(value: T | T[] | undefined): T[] {
   if (!value) return [];
   return Array.isArray(value) ? value : [value];
+}
+
+function textOf(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return textOf(object["#text"] ?? object.__cdata ?? "");
+  }
+  return "";
 }
 
 function cleanTitle(value: string) {
@@ -75,7 +91,7 @@ async function resolveArxivDates(items: Array<Record<string, string>>, forceRefr
   return dates;
 }
 
-async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]> {
+async function collect(source: Source, forceRefresh = false): Promise<CollectedItem[]> {
   const response = await fetch(source.url, {
     ...(forceRefresh ? { cache: "no-store" as const } : { next: { revalidate: 600 } }),
     headers: { "User-Agent": "KuangInfoHub/0.1 (+personal news dashboard)" },
@@ -102,7 +118,8 @@ async function collect(source: Source, forceRefresh = false): Promise<FeedItem[]
       new Date(item.pubDate || Date.now()).toISOString(),
     tags: source.tags,
     relevance: Math.max(58, 92 - index * 4),
-    reason: `符合你追蹤的「${source.tags[0]}」主題`
+    reason: `符合你追蹤的「${source.tags[0]}」主題`,
+    excerpt: stripHtml(textOf(item.description ?? item["content:encoded"] ?? ""))
   }));
 }
 
@@ -111,16 +128,43 @@ export async function GET(request: NextRequest) {
   const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
   const selected = category && category !== "all" ? sources.filter((s) => s.category === category) : sources;
   const settled = await Promise.allSettled(selected.map((source) => collect(source, forceRefresh)));
-  const live = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  const collected = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  const excerpts = new Map(collected.map((item) => [item.id, item.excerpt]));
+  const live: FeedItem[] = collected.map((item) => {
+    const { excerpt, ...rest } = item;
+    void excerpt;
+    return rest;
+  });
   const fallback = category && category !== "all" ? demoFeed.filter((item) => item.category === category) : demoFeed;
   const rawItems = live.length ? live : fallback;
-  const items = deduplicateFeedItems(rawItems);
+  const unique = deduplicateFeedItems(rawItems);
+
+  // 英文的 AI 新聞交給 Claude 產生繁中標題與摘要。
+  const inputs = new Map<string, SummaryInput>();
+  if (aiSummaryEnabled() && live.length) {
+    unique.forEach((item) => {
+      const excerpt = excerpts.get(item.id) || "";
+      if (item.category === "world" && isMostlyEnglish(item.title, excerpt)) {
+        inputs.set(item.id, { id: item.id, title: item.title, url: item.url, source: item.source, excerpt });
+      }
+    });
+  }
+  const summarized = inputs.size ? await attachSummaries(unique, inputs, summaryBudgetMs) : null;
+  if (summarized?.pending.length) after(() => Promise.allSettled(summarized.pending));
+  const items = summarized?.items ?? unique;
 
   return NextResponse.json({
     items,
     mode: live.length ? "live" : "demo",
     updatedAt: new Date().toISOString(),
     sourceCount: settled.filter((result) => result.status === "fulfilled").length,
-    duplicateCount: rawItems.length - items.length
+    duplicateCount: rawItems.length - items.length,
+    aiSummary: {
+      enabled: aiSummaryEnabled(),
+      eligible: inputs.size,
+      summarized: summarized?.summarized ?? 0,
+      pending: summarized?.pending.length ?? 0,
+      failed: summarized?.failed ?? 0
+    }
   });
 }

@@ -7,7 +7,11 @@ export type FeedItem = {
   source: string;
   sourceIcon?: string;
   title: string;
+  /** 英文新聞的 AI 繁中標題 */
+  titleZh?: string;
   summary: string;
+  /** summary 是否為 AI 產生的摘要 */
+  aiSummary?: boolean;
   url: string;
   publishedAt: string;
   image?: string;
