@@ -73,6 +73,28 @@ function quoteTime(value: string) {
   }).format(date);
 }
 
+const feedCacheKey = "kuang-feed-cache";
+type FeedCache = { items: FeedItem[]; updatedAt: string; sourceCount: number; duplicateCount: number };
+
+function readFeedCache(): FeedCache | null {
+  try {
+    const cache = JSON.parse(localStorage.getItem(feedCacheKey) || "null");
+    return cache && Array.isArray(cache.items) && cache.items.length && typeof cache.updatedAt === "string" ? cache : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeFeedCache(cache: FeedCache) {
+  try {
+    localStorage.setItem(feedCacheKey, JSON.stringify(cache));
+  } catch {
+    // 儲存空間不足或被封鎖時略過快取。
+  }
+}
+
+const pullThreshold = 64;
+
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="modal" role="dialog" aria-modal="true" aria-label={title}>
@@ -113,6 +135,7 @@ export default function InfoHub() {
   const [sourceError, setSourceError] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const knownFeedIds = useRef<Set<string>>(new Set());
+  const [pull, setPull] = useState(0);
 
   const feed = useMemo(() => {
     const unique = new Map<string, FeedItem>();
@@ -187,10 +210,18 @@ export default function InfoHub() {
       setSourceCount(Number(data.sourceCount) || 0);
       setUpdatedAt(data.updatedAt || new Date().toISOString());
       setDuplicateCount(Number(data.duplicateCount) || 0);
+      if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
       notifyNewItems(deduplicateFeedItems([...items, ...customItems]));
     } catch {
-      setBaseFeed(demoFeed);
-      setMode("demo");
+      // 離線或連線失敗時保留上次成功的情報，沒有快取才改用展示資料。
+      const cached = readFeedCache();
+      if (cached) {
+        setBaseFeed(cached.items);
+        setUpdatedAt(cached.updatedAt);
+      } else {
+        setBaseFeed(demoFeed);
+        setMode("demo");
+      }
     } finally {
       setLoading(false);
     }
@@ -231,6 +262,14 @@ export default function InfoHub() {
       setCustomSources(restoredSources);
       if (savedNotifications) setNotificationSettings(savedNotifications);
       setNotificationPermission("Notification" in window ? Notification.permission : "unsupported");
+      const cached = readFeedCache();
+      if (cached) {
+        setBaseFeed(cached.items);
+        setMode("live");
+        setUpdatedAt(cached.updatedAt);
+        setSourceCount(cached.sourceCount);
+        setDuplicateCount(cached.duplicateCount);
+      }
       Promise.all([
         fetch("/api/feed", { cache: "no-store" }).then((response) => response.json()),
         fetchCustomSources(restoredSources),
@@ -242,6 +281,7 @@ export default function InfoHub() {
         setSourceCount(Number(data.sourceCount) || 0);
         setDuplicateCount(Number(data.duplicateCount) || 0);
         setUpdatedAt(data.updatedAt || new Date().toISOString());
+        if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
         knownFeedIds.current = new Set([...items, ...customItems].map((item) => item.id));
       }).catch(() => undefined);
     }, 0);
@@ -257,6 +297,45 @@ export default function InfoHub() {
     return () => {
       window.clearTimeout(restoreTimer);
       window.removeEventListener("keydown", shortcut);
+    };
+  }, []);
+
+  const refreshRef = useRef(refresh);
+  useEffect(() => { refreshRef.current = refresh; });
+
+  useEffect(() => {
+    let startY: number | null = null;
+    let distance = 0;
+    const blocked = () => Boolean(document.querySelector(".modal-backdrop, .sidebar.open"));
+    const onStart = (event: TouchEvent) => {
+      startY = window.scrollY <= 0 && event.touches.length === 1 && !blocked() ? event.touches[0].clientY : null;
+      distance = 0;
+    };
+    const onMove = (event: TouchEvent) => {
+      if (startY === null) return;
+      const delta = event.touches[0].clientY - startY;
+      if (delta <= 0 || window.scrollY > 0) {
+        if (distance) { distance = 0; setPull(0); }
+        return;
+      }
+      distance = Math.min(110, delta * 0.5);
+      setPull(distance);
+    };
+    const onEnd = () => {
+      if (startY !== null && distance >= pullThreshold) void refreshRef.current();
+      startY = null;
+      distance = 0;
+      setPull(0);
+    };
+    window.addEventListener("touchstart", onStart, { passive: true });
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onEnd);
+    window.addEventListener("touchcancel", onEnd);
+    return () => {
+      window.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+      window.removeEventListener("touchcancel", onEnd);
     };
   }, []);
 
@@ -392,9 +471,11 @@ export default function InfoHub() {
       </aside>
       {mobileMenu && <div className="scrim" onClick={() => setMobileMenu(false)} />}
 
+      {(pull > 0 || loading) && <div className={`pull-indicator ${loading ? "spinning" : ""} ${pull >= pullThreshold ? "ready" : ""}`} style={{ "--pull": `${loading ? pullThreshold : pull}px`, "--p": loading ? 1 : pull / pullThreshold } as React.CSSProperties} aria-live="polite"><ArrowsClockwise weight="bold" /><span>{loading ? "更新中…" : pull >= pullThreshold ? "放開以更新" : "下拉更新"}</span></div>}
+
       <main>
         <header className="topbar">
-          <button className="mobile-brand" onClick={() => setMobileMenu(true)}><TrendUp weight="bold" /></button>
+          <button className="mobile-brand" onClick={() => setMobileMenu(true)} aria-label="開啟選單"><TrendUp weight="bold" /></button>
           <div className="search"><MagnifyingGlass /><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋新聞、股票、主題…" /><kbd>⌘ K</kbd></div>
           <div className="top-actions"><button className={`status ${mode}`} onClick={() => setDialog("status")}><WifiHigh />{mode === "live" ? "即時來源" : "展示模式"}</button><button className={`icon-button ${notificationsOn ? "enabled" : ""}`} onClick={() => setDialog("notifications")} aria-label="通知設定"><Bell weight={notificationsOn ? "fill" : "regular"} />{notificationsOn && <i />}</button><button className="add-button" onClick={() => setDialog("sources")}><Plus weight="bold" />新增來源</button></div>
         </header>
@@ -445,6 +526,14 @@ export default function InfoHub() {
           </section>
         </div>
       </main>
+
+      <nav className="tab-bar" aria-label="快速導覽">
+        <button className={!bookmarkedOnly && !dialog ? "active" : ""} onClick={() => { setBookmarkedOnly(false); setDialog(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}><House weight={!bookmarkedOnly && !dialog ? "fill" : "regular"} /><span>情報</span></button>
+        <button className={bookmarkedOnly && !dialog ? "active" : ""} onClick={() => { setBookmarkedOnly(true); setDialog(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}><BookmarkSimple weight={bookmarkedOnly && !dialog ? "fill" : "regular"} /><span>收藏{bookmarks.length ? ` ${bookmarks.length}` : ""}</span></button>
+        <button className={dialog === "sources" ? "active" : ""} onClick={() => setDialog("sources")}><Plus weight="bold" /><span>來源</span></button>
+        <button className={dialog === "status" ? "active" : ""} onClick={() => setDialog("status")}><WifiHigh weight={dialog === "status" ? "fill" : "regular"} /><span>{mode === "live" ? "即時" : "展示"}</span></button>
+        <button className={dialog === "notifications" ? "active" : ""} onClick={() => setDialog("notifications")}><Bell weight={notificationsOn || dialog === "notifications" ? "fill" : "regular"} /><span>通知</span></button>
+      </nav>
 
       {dialog === "status" && <Modal title="即時來源狀態" onClose={() => setDialog(null)}>
         <div className="status-grid">
