@@ -9,6 +9,8 @@ export type FeedFeedbackEntry = {
   tags: string[];
   terms: string[];
   updatedAt: string;
+  /** 文章標題（供 AI 理解喜好；舊紀錄可能沒有） */
+  title?: string;
 };
 
 export type FeedFeedback = Record<string, FeedFeedbackEntry>;
@@ -34,7 +36,8 @@ export function createFeedbackEntry(item: FeedItem, value: FeedbackValue): FeedF
     category: item.category,
     tags: item.tags,
     terms: titleTerms(item.title),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    title: (item.titleZh || item.title).slice(0, 160)
   };
 }
 
@@ -48,8 +51,22 @@ export function isFeedFeedback(value: unknown): value is FeedFeedback {
       typeof candidate.category === "string" &&
       Array.isArray(candidate.tags) && candidate.tags.every((tag) => typeof tag === "string") &&
       Array.isArray(candidate.terms) && candidate.terms.every((term) => typeof term === "string") &&
-      typeof candidate.updatedAt === "string";
+      typeof candidate.updatedAt === "string" &&
+      (candidate.title === undefined || typeof candidate.title === "string");
   });
+}
+
+/** 最近的讚／倒讚，整理成給 AI 參考的範例（最多 30 則）。 */
+export function feedbackExamples(feedback: FeedFeedback, limit = 30) {
+  return Object.values(feedback)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, limit)
+    .map((entry) => ({
+      title: entry.title || entry.tags.join("、") || entry.source,
+      source: entry.source,
+      category: entry.category,
+      value: entry.value
+    }));
 }
 
 function preferenceProfile(feedback: FeedFeedback) {

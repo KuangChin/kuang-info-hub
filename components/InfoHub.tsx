@@ -9,7 +9,7 @@ import {
 import { demoFeed } from "@/lib/demo-data";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
 import {
-  createFeedbackEntry, isFeedFeedback,
+  createFeedbackEntry, feedbackExamples, isFeedFeedback, rankFeedByPreferences,
   type FeedbackValue, type FeedFeedback
 } from "@/lib/feed-preferences";
 import type { CustomSource, FeedCategory, FeedItem, MarketQuote } from "@/lib/types";
@@ -35,6 +35,14 @@ const defaultMarketSymbols = ["TAIEX", "2330", "2454", "2327", "NVDA"];
 type Dialog = "status" | "notifications" | "sources" | null;
 
 type NotificationSettings = { enabled: boolean; keywords: string };
+type SortMode = "recommended" | "latest";
+type AiRankState = {
+  status: "idle" | "loading" | "ready" | "off" | "error";
+  scores: Record<string, { score: number; reason: string }>;
+  examples: number;
+  error?: string;
+};
+
 type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; pending: number; failed: number; error?: string };
 
 function readAiStatus(value: unknown): AiSummaryStatus | null {
@@ -144,6 +152,9 @@ export default function InfoHub() {
   const knownFeedIds = useRef<Set<string>>(new Set());
   const [pull, setPull] = useState(0);
   const [aiStatus, setAiStatus] = useState<AiSummaryStatus | null>(null);
+  const [sortMode, setSortMode] = useState<SortMode>("recommended");
+  const [aiRank, setAiRank] = useState<AiRankState>({ status: "idle", scores: {}, examples: 0 });
+  const lastRankRequest = useRef("");
 
   const feed = useMemo(() => {
     const unique = new Map<string, FeedItem>();
@@ -270,6 +281,12 @@ export default function InfoHub() {
       if (restoredSymbols) setSelectedSymbols(restoredSymbols);
       setCustomSources(restoredSources);
       if (savedNotifications) setNotificationSettings(savedNotifications);
+      try {
+        const savedSort = localStorage.getItem("kuang-sort-mode");
+        if (savedSort === "latest" || savedSort === "recommended") setSortMode(savedSort);
+      } catch {
+        // 無法讀取時使用預設的推薦排序。
+      }
       setNotificationPermission("Notification" in window ? Notification.permission : "unsupported");
       const cached = readFeedCache();
       if (cached) {
@@ -348,6 +365,59 @@ export default function InfoHub() {
       window.removeEventListener("touchcancel", onEnd);
     };
   }, []);
+
+  // 讚／倒讚或新聞更新後，請 AI 依喜好重新評分（稍等片刻合併連續操作）。
+  useEffect(() => {
+    const examples = feedbackExamples(feedback);
+    const candidates = [...feed]
+      .filter((item) => item.sig)
+      .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
+      .slice(0, 120)
+      .map(({ id, title, source, category, sig }) => ({ id, title, source, category, sig }));
+    const requestKey = JSON.stringify([examples.map((example) => [example.title, example.value]), candidates.map((candidate) => candidate.id)]);
+    if (requestKey === lastRankRequest.current) return;
+    const timer = window.setTimeout(() => {
+      if (!examples.length || !candidates.length) {
+        lastRankRequest.current = requestKey;
+        setAiRank({ status: "idle", scores: {}, examples: 0 });
+        return;
+      }
+      lastRankRequest.current = requestKey;
+      setAiRank((current) => ({ ...current, status: "loading" }));
+      fetch("/api/rank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ examples, candidates }) })
+        .then((response) => response.json())
+        .then((data) => {
+          if (requestKey !== lastRankRequest.current) return;
+          if (!data.enabled) {
+            setAiRank({ status: "off", scores: {}, examples: examples.length });
+            return;
+          }
+          const scores = data.scores && typeof data.scores === "object" ? data.scores : {};
+          const hasScores = Object.keys(scores).length > 0;
+          setAiRank({
+            status: hasScores ? "ready" : "error",
+            scores,
+            examples: examples.length,
+            error: typeof data.error === "string" ? data.error : hasScores ? undefined : "沒有取得評分"
+          });
+        })
+        .catch(() => {
+          if (requestKey !== lastRankRequest.current) return;
+          lastRankRequest.current = "";
+          setAiRank((current) => ({ ...current, status: "error", error: "無法連線到排序服務" }));
+        });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [feed, feedback]);
+
+  function chooseSort(mode: SortMode) {
+    setSortMode(mode);
+    try {
+      localStorage.setItem("kuang-sort-mode", mode);
+    } catch {
+      // 儲存失敗時只影響這次瀏覽。
+    }
+  }
 
   function toggleBookmark(id: string) {
     setBookmarks((current) => {
@@ -443,10 +513,31 @@ export default function InfoHub() {
       const queryMatch = !q || [item.title, item.titleZh || "", item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
       return categoryMatch && bookmarkMatch && queryMatch;
     });
+    if (sortMode === "latest") {
+      return filtered
+        .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
+        .slice(0, 10);
+    }
+    const scored = Object.keys(aiRank.scores).length > 0;
+    if (!scored) return rankFeedByPreferences(filtered, feedback).slice(0, 10);
+
+    // AI 分數為主，加上直接回饋與新鮮度；尚未評分的新聞給中間分數。
+    // 以最後更新時間為基準計算新鮮度，排序結果才穩定。
+    const now = new Date(updatedAt).getTime() || 0;
     return filtered
-      .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
-      .slice(0, 10);
-  }, [feed, active, query, bookmarkedOnly, bookmarks]);
+      .map((item) => {
+        const ai = aiRank.scores[item.id];
+        const direct = feedback[item.id]?.value || 0;
+        const ageHours = Math.max(0, (now - new Date(item.publishedAt).getTime()) / 3_600_000);
+        const freshness = Number.isFinite(ageHours) ? Math.max(0, 10 - ageHours / 6) : 0;
+        const score = (ai ? ai.score : 50) + freshness + (direct === 1 ? 20 : direct === -1 ? -100 : 0);
+        const ranked: FeedItem = ai ? { ...item, relevance: ai.score, reason: ai.reason || item.reason, aiRanked: true } : item;
+        return { item: ranked, score };
+      })
+      .sort((left, right) => right.score - left.score || +new Date(right.item.publishedAt) - +new Date(left.item.publishedAt))
+      .slice(0, 10)
+      .map(({ item }) => item);
+  }, [feed, active, query, bookmarkedOnly, bookmarks, sortMode, aiRank.scores, feedback, updatedAt]);
   const feedbackCount = Object.keys(feedback).length;
   const selectedQuotes = useMemo(() => selectedSymbols.flatMap((symbol) => {
     const quote = quotes.find((item) => item.symbol === symbol);
@@ -515,7 +606,7 @@ export default function InfoHub() {
           </section>
 
           <section className="feed-section">
-            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : `依發布時間顯示最新 10 篇${feedbackCount ? ` · 已記錄 ${feedbackCount} 次回饋` : ""}`}</span></div><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading}><ArrowsClockwise />{loading ? "更新中" : "即時更新"}</button></div>
+            <div className="section-heading feed-heading"><div><h2>{bookmarkedOnly ? "已收藏" : "你的情報流"}</h2><span>{bookmarkedOnly ? "最多顯示 10 則收藏" : sortMode === "latest" ? "依發布時間顯示最新 10 篇" : aiRank.status === "ready" ? `AI 依你的 ${aiRank.examples} 則回饋推薦` : aiRank.status === "loading" ? "AI 正在依你的喜好排序…" : feedbackCount ? `依你的 ${feedbackCount} 則回饋推薦` : "按讚或倒讚，讓推薦更準"}</span></div><nav className="feed-tools" aria-label="排序與更新"><span className="sort-toggle" role="group" aria-label="排序方式"><button className={sortMode === "recommended" ? "active" : ""} aria-pressed={sortMode === "recommended"} onClick={() => chooseSort("recommended")}><Sparkle weight={sortMode === "recommended" ? "fill" : "regular"} />推薦</button><button className={sortMode === "latest" ? "active" : ""} aria-pressed={sortMode === "latest"} onClick={() => chooseSort("latest")}><Clock />最新</button></span><button className={`refresh ${loading ? "spinning" : ""}`} onClick={() => void refresh()} disabled={loading} aria-label="即時更新"><ArrowsClockwise /><em>{loading ? "更新中" : "即時更新"}</em></button></nav></div>
             <div className="filter-row">{categories.map((item) => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}>{item.label}</button>)}</div>
             <div className="feed-layout">
               <div className="feed-list">{visibleFeed.length ? visibleFeed.map((item) => {
@@ -524,7 +615,7 @@ export default function InfoHub() {
                   <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock /><time dateTime={item.publishedAt} title={published.exact}>{published.label}</time></span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}</div>
                   <a href={articleUrl} target="_blank" rel="noreferrer"><h3>{item.titleZh || item.title}</h3>{item.titleZh && <span className="original-title" lang="en">{item.title}</span>}</a>{item.aiSummary ? <div className="ai-summary"><span className="ai-badge"><Sparkle weight="fill" />AI 摘要</span><p>{item.summary}</p></div> : <p>{item.summary}</p>}
                   <div className="feed-footer"><div className="tags">{item.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div><div className="card-actions"><span className="relevance">{item.relevance}% 相關</span><span className="feedback-actions" aria-label="偏好回饋"><button onClick={() => rateItem(item, 1)} className={rating === 1 ? "liked" : ""} aria-label="這篇有命中我的喜好" title="有命中"><ThumbsUp weight={rating === 1 ? "fill" : "regular"} /></button><button onClick={() => rateItem(item, -1)} className={rating === -1 ? "disliked" : ""} aria-label="這篇沒有命中我的喜好" title="沒命中"><ThumbsDown weight={rating === -1 ? "fill" : "regular"} /></button></span><button onClick={() => toggleBookmark(item.id)} className={saved ? "saved" : ""} aria-label="收藏">{saved ? <BookmarkSimple weight="fill" /> : <BookmarkSimple />}</button><a href={articleUrl} target="_blank" rel="noreferrer" aria-label="開啟原文"><ArrowSquareOut /></a></div></div>
-                  {item.reason && <div className="reason"><Sparkle weight="fill" /><span>{item.reason}</span></div>}
+                  {item.reason && <div className={`reason ${item.aiRanked ? "ai" : ""}`}><Sparkle weight="fill" /><span>{item.aiRanked && <b>AI 推薦 {item.relevance}</b>}{item.reason}</span></div>}
                 </div></article>;
               }) : <div className="empty"><MagnifyingGlass /><h3>找不到符合的情報</h3><p>試試其他關鍵字、分類，或先收藏幾則情報。</p></div>}</div>
               <aside className="right-rail">
@@ -553,6 +644,7 @@ export default function InfoHub() {
           <div><span>已過濾重複新聞</span><strong>{duplicateCount} 則</strong></div>
           <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
           <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong>{aiStatus?.error && <small className="status-error">{aiStatus.error}</small>}</div>
+          <div><span>AI 喜好排序</span><strong className={aiRank.status === "ready" ? "good" : "warn"}>{aiRank.status === "ready" ? `已依 ${aiRank.examples} 則回饋評分 ${Object.keys(aiRank.scores).length} 篇` : aiRank.status === "loading" ? "評分中…" : aiRank.status === "off" ? "未設定 API Key" : aiRank.status === "error" ? "評分失敗" : "先按讚或倒讚幾篇新聞"}</strong>{aiRank.error && <small className="status-error">{aiRank.error}</small>}</div>
           <div><span>市場來源</span><strong className={marketFailedSources.length ? "warn" : "good"}>{marketFailedSources.length ? `異常：${marketFailedSources.join("、")}` : "TWSE、NASDAQ 正常"}</strong></div>
         </div>
         <p className="dialog-note">最後更新：{quoteTime(updatedAt)}。來源讀取失敗時，新聞才會切換到展示備援；股票不會顯示估算價格。</p>
