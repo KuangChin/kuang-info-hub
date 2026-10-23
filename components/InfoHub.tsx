@@ -35,6 +35,13 @@ const defaultMarketSymbols = ["TAIEX", "2330", "2454", "2327", "NVDA"];
 type Dialog = "status" | "notifications" | "sources" | null;
 
 type NotificationSettings = { enabled: boolean; keywords: string };
+type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; pending: number; failed: number };
+
+function readAiStatus(value: unknown): AiSummaryStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const status = value as Record<string, unknown>;
+  return { enabled: status.enabled === true, eligible: Number(status.eligible) || 0, summarized: Number(status.summarized) || 0, pending: Number(status.pending) || 0, failed: Number(status.failed) || 0 };
+}
 
 function articleTime(date: string, referenceDate: string) {
   const published = new Date(date);
@@ -136,6 +143,7 @@ export default function InfoHub() {
   const searchRef = useRef<HTMLInputElement>(null);
   const knownFeedIds = useRef<Set<string>>(new Set());
   const [pull, setPull] = useState(0);
+  const [aiStatus, setAiStatus] = useState<AiSummaryStatus | null>(null);
 
   const feed = useMemo(() => {
     const unique = new Map<string, FeedItem>();
@@ -170,7 +178,7 @@ export default function InfoHub() {
     if (!fresh.length || !notificationSettings.enabled || notificationPermission !== "granted") return;
     const keywords = notificationSettings.keywords.split(/[,，\s]+/).map((item) => item.trim().toLowerCase()).filter(Boolean);
     const matched = fresh.filter((item) => !keywords.length || keywords.some((keyword) =>
-      [item.title, item.summary, ...item.tags].join(" ").toLowerCase().includes(keyword)
+      [item.title, item.titleZh || "", item.summary, ...item.tags].join(" ").toLowerCase().includes(keyword)
     ));
     if (!matched.length) return;
     const first = matched[0];
@@ -210,6 +218,7 @@ export default function InfoHub() {
       setSourceCount(Number(data.sourceCount) || 0);
       setUpdatedAt(data.updatedAt || new Date().toISOString());
       setDuplicateCount(Number(data.duplicateCount) || 0);
+      setAiStatus(readAiStatus(data.aiSummary));
       if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
       notifyNewItems(deduplicateFeedItems([...items, ...customItems]));
     } catch {
@@ -280,6 +289,7 @@ export default function InfoHub() {
         setMode(data.mode || "demo");
         setSourceCount(Number(data.sourceCount) || 0);
         setDuplicateCount(Number(data.duplicateCount) || 0);
+        setAiStatus(readAiStatus(data.aiSummary));
         setUpdatedAt(data.updatedAt || new Date().toISOString());
         if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
         knownFeedIds.current = new Set([...items, ...customItems].map((item) => item.id));
@@ -430,7 +440,7 @@ export default function InfoHub() {
       const categoryMatch = active === "all" || item.category === active;
       const bookmarkMatch = !bookmarkedOnly || bookmarks.includes(item.id);
       const q = query.trim().toLowerCase();
-      const queryMatch = !q || [item.title, item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
+      const queryMatch = !q || [item.title, item.titleZh || "", item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
       return categoryMatch && bookmarkMatch && queryMatch;
     });
     return filtered
@@ -448,7 +458,7 @@ export default function InfoHub() {
   const topicCounts = trackedTopics.map((topic) => {
     const terms = topic.toLowerCase().split(/\s+/);
     return feed.filter((item) => terms.some((term) =>
-      [item.title, item.summary, ...item.tags].join(" ").toLowerCase().includes(term)
+      [item.title, item.titleZh || "", item.summary, ...item.tags].join(" ").toLowerCase().includes(term)
     )).length;
   });
   const pulseTopics = useMemo(() => {
@@ -512,7 +522,7 @@ export default function InfoHub() {
                 const meta = categoryMeta[item.category]; const saved = bookmarks.includes(item.id); const articleUrl = originalArticleUrl(item.url); const rating = feedback[item.id]?.value; const published = articleTime(item.publishedAt, updatedAt);
                 return <article className="feed-card" key={`${item.category}:${item.id}:${item.url}`}><div className="feed-accent" data-category={item.category} /><div className="feed-content">
                   <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock /><time dateTime={item.publishedAt} title={published.exact}>{published.label}</time></span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}</div>
-                  <a href={articleUrl} target="_blank" rel="noreferrer"><h3>{item.title}</h3></a><p>{item.summary}</p>
+                  <a href={articleUrl} target="_blank" rel="noreferrer"><h3>{item.titleZh || item.title}</h3>{item.titleZh && <span className="original-title" lang="en">{item.title}</span>}</a>{item.aiSummary ? <div className="ai-summary"><span className="ai-badge"><Sparkle weight="fill" />AI 摘要</span><p>{item.summary}</p></div> : <p>{item.summary}</p>}
                   <div className="feed-footer"><div className="tags">{item.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div><div className="card-actions"><span className="relevance">{item.relevance}% 相關</span><span className="feedback-actions" aria-label="偏好回饋"><button onClick={() => rateItem(item, 1)} className={rating === 1 ? "liked" : ""} aria-label="這篇有命中我的喜好" title="有命中"><ThumbsUp weight={rating === 1 ? "fill" : "regular"} /></button><button onClick={() => rateItem(item, -1)} className={rating === -1 ? "disliked" : ""} aria-label="這篇沒有命中我的喜好" title="沒命中"><ThumbsDown weight={rating === -1 ? "fill" : "regular"} /></button></span><button onClick={() => toggleBookmark(item.id)} className={saved ? "saved" : ""} aria-label="收藏">{saved ? <BookmarkSimple weight="fill" /> : <BookmarkSimple />}</button><a href={articleUrl} target="_blank" rel="noreferrer" aria-label="開啟原文"><ArrowSquareOut /></a></div></div>
                   {item.reason && <div className="reason"><Sparkle weight="fill" /><span>{item.reason}</span></div>}
                 </div></article>;
@@ -542,6 +552,7 @@ export default function InfoHub() {
           <div><span>自訂來源</span><strong>{customSources.length} 個</strong></div>
           <div><span>已過濾重複新聞</span><strong>{duplicateCount} 則</strong></div>
           <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
+          <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong></div>
           <div><span>市場來源</span><strong className={marketFailedSources.length ? "warn" : "good"}>{marketFailedSources.length ? `異常：${marketFailedSources.join("、")}` : "TWSE、NASDAQ 正常"}</strong></div>
         </div>
         <p className="dialog-note">最後更新：{quoteTime(updatedAt)}。來源讀取失敗時，新聞才會切換到展示備援；股票不會顯示估算價格。</p>
