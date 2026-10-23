@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { demoFeed } from "@/lib/demo-data";
 import { resolveGoogleNewsDates } from "@/lib/article-date";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
+import { signFeedItems } from "@/lib/ai-rank";
 import { aiSummaryEnabled, attachSummaries, isMostlyEnglish, stripHtml, type SummaryInput } from "@/lib/ai-summary";
 import type { FeedCategory, FeedItem } from "@/lib/types";
 
@@ -154,7 +155,7 @@ export async function GET(request: NextRequest) {
   const items = summarized?.items ?? unique;
 
   return NextResponse.json({
-    items,
+    items: signFeedItems(items),
     mode: live.length ? "live" : "demo",
     updatedAt: new Date().toISOString(),
     sourceCount: settled.filter((result) => result.status === "fulfilled").length,

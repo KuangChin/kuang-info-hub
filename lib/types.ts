@@ -19,6 +19,10 @@ export type FeedItem = {
   relevance: number;
   reason?: string;
   breaking?: boolean;
+  /** 伺服器簽章：證明這篇新聞由本站 API 提供，AI 排序只接受有簽章的新聞 */
+  sig?: string;
+  /** relevance 與 reason 是否由 AI 喜好排序產生 */
+  aiRanked?: boolean;
 };
 
 export type CustomSource = {

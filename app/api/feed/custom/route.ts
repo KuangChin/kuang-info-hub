@@ -3,6 +3,7 @@ import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
+import { signFeedItems } from "@/lib/ai-rank";
 import type { CustomSource, FeedCategory, FeedItem } from "@/lib/types";
 
 const parser = new XMLParser({ ignoreAttributes: false });
@@ -119,7 +120,7 @@ export async function POST(request: Request) {
     }
     await validatePublicUrl(source.url);
     const xml = await fetchPublicFeed(source.url);
-    return NextResponse.json({ source, items: normalize(source, xml) });
+    return NextResponse.json({ source, items: signFeedItems(normalize(source, xml)) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "無法讀取此來源";
     return NextResponse.json({ error: message }, { status: 400 });
