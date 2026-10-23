@@ -164,7 +164,8 @@ export async function GET(request: NextRequest) {
       eligible: inputs.size,
       summarized: summarized?.summarized ?? 0,
       pending: summarized?.pending.length ?? 0,
-      failed: summarized?.failed ?? 0
+      failed: summarized?.failed ?? 0,
+      error: summarized?.error || undefined
     }
   });
 }

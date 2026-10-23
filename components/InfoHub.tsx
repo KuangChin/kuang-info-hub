@@ -35,12 +35,12 @@ const defaultMarketSymbols = ["TAIEX", "2330", "2454", "2327", "NVDA"];
 type Dialog = "status" | "notifications" | "sources" | null;
 
 type NotificationSettings = { enabled: boolean; keywords: string };
-type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; pending: number; failed: number };
+type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; pending: number; failed: number; error?: string };
 
 function readAiStatus(value: unknown): AiSummaryStatus | null {
   if (!value || typeof value !== "object") return null;
   const status = value as Record<string, unknown>;
-  return { enabled: status.enabled === true, eligible: Number(status.eligible) || 0, summarized: Number(status.summarized) || 0, pending: Number(status.pending) || 0, failed: Number(status.failed) || 0 };
+  return { enabled: status.enabled === true, eligible: Number(status.eligible) || 0, summarized: Number(status.summarized) || 0, pending: Number(status.pending) || 0, failed: Number(status.failed) || 0, error: typeof status.error === "string" ? status.error : undefined };
 }
 
 function articleTime(date: string, referenceDate: string) {
@@ -552,7 +552,7 @@ export default function InfoHub() {
           <div><span>自訂來源</span><strong>{customSources.length} 個</strong></div>
           <div><span>已過濾重複新聞</span><strong>{duplicateCount} 則</strong></div>
           <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
-          <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong></div>
+          <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong>{aiStatus?.error && <small className="status-error">{aiStatus.error}</small>}</div>
           <div><span>市場來源</span><strong className={marketFailedSources.length ? "warn" : "good"}>{marketFailedSources.length ? `異常：${marketFailedSources.join("、")}` : "TWSE、NASDAQ 正常"}</strong></div>
         </div>
         <p className="dialog-note">最後更新：{quoteTime(updatedAt)}。來源讀取失敗時，新聞才會切換到展示備援；股票不會顯示估算價格。</p>
