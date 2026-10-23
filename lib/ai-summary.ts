@@ -102,6 +102,8 @@ function requestBody(input: SummaryInput, tuned: boolean) {
 
 // 從手機複製貼上時容易夾帶空白或換行。
 const apiKey = () => (process.env.ANTHROPIC_API_KEY || "").trim();
+// 金鑰沒有綁定工作區時，Claude API 要求以 anthropic-workspace-id 指定工作區。
+const workspaceId = () => (process.env.ANTHROPIC_WORKSPACE_ID || "").trim();
 let tunedSupported = true;
 
 async function requestSummary(input: SummaryInput): Promise<AiSummary> {
@@ -116,7 +118,8 @@ async function requestSummary(input: SummaryInput): Promise<AiSummary> {
       headers: {
         "content-type": "application/json",
         "x-api-key": key,
-        "anthropic-version": "2023-06-01"
+        "anthropic-version": "2023-06-01",
+        ...(workspaceId() ? { "anthropic-workspace-id": workspaceId() } : {})
       },
       body: JSON.stringify(requestBody(input, tuned)),
       signal: AbortSignal.timeout(25000)
@@ -133,7 +136,7 @@ async function requestSummary(input: SummaryInput): Promise<AiSummary> {
     }
 
     const message = await readError(response);
-    if (response.status === 400 && tuned) {
+    if (response.status === 400 && tuned && /thinking|effort|output_config/i.test(message)) {
       // 參數不被接受時，改用模型預設設定再試一次。
       tunedSupported = false;
       console.warn("[ai-summary] 改用預設參數重試：", message);
