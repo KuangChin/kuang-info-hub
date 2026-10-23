@@ -24,6 +24,7 @@ const sources: Source[] = [
   { name: "NBA", category: "nba", url: "https://news.google.com/rss/search?q=NBA&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["NBA", "籃球"] },
   { name: "MMORPG", category: "gaming", url: "https://news.google.com/rss/search?q=MMORPG&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["MMORPG", "遊戲"] },
   { name: "全球 AI", category: "world", url: "https://news.google.com/rss/search?q=%E5%85%A8%E7%90%83%20AI%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E6%85%A7%20when%3A7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["AI", "國際", "人工智慧"] },
+  { name: "Anthropic 動態", category: "world", url: "https://news.google.com/rss/search?q=Anthropic%20(Claude%20OR%20AI)%20when%3A7d&hl=en-US&gl=US&ceid=US:en", tags: ["AI 技術", "Anthropic", "Claude"] },
   { name: "Hugging Face", category: "world", url: "https://huggingface.co/blog/feed.xml", tags: ["AI 技術", "開源模型", "Hugging Face"] },
   { name: "Google DeepMind", category: "world", url: "https://deepmind.google/blog/rss.xml", tags: ["AI 研究", "前沿技術", "DeepMind"] },
   { name: "OpenAI", category: "world", url: "https://openai.com/news/rss.xml", tags: ["AI 技術", "模型更新", "OpenAI"] },
