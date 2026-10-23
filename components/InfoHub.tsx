@@ -394,7 +394,7 @@ export default function InfoHub() {
 
       <main>
         <header className="topbar">
-          <button className="mobile-brand" onClick={() => setMobileMenu(true)}><TrendUp weight="bold" /></button>
+          <button className="mobile-brand" onClick={() => setMobileMenu(true)} aria-label="開啟選單"><TrendUp weight="bold" /></button>
           <div className="search"><MagnifyingGlass /><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋新聞、股票、主題…" /><kbd>⌘ K</kbd></div>
           <div className="top-actions"><button className={`status ${mode}`} onClick={() => setDialog("status")}><WifiHigh />{mode === "live" ? "即時來源" : "展示模式"}</button><button className={`icon-button ${notificationsOn ? "enabled" : ""}`} onClick={() => setDialog("notifications")} aria-label="通知設定"><Bell weight={notificationsOn ? "fill" : "regular"} />{notificationsOn && <i />}</button><button className="add-button" onClick={() => setDialog("sources")}><Plus weight="bold" />新增來源</button></div>
         </header>
@@ -445,6 +445,14 @@ export default function InfoHub() {
           </section>
         </div>
       </main>
+
+      <nav className="tab-bar" aria-label="快速導覽">
+        <button className={!bookmarkedOnly && !dialog ? "active" : ""} onClick={() => { setBookmarkedOnly(false); setDialog(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}><House weight={!bookmarkedOnly && !dialog ? "fill" : "regular"} /><span>情報</span></button>
+        <button className={bookmarkedOnly && !dialog ? "active" : ""} onClick={() => { setBookmarkedOnly(true); setDialog(null); window.scrollTo({ top: 0, behavior: "smooth" }); }}><BookmarkSimple weight={bookmarkedOnly && !dialog ? "fill" : "regular"} /><span>收藏{bookmarks.length ? ` ${bookmarks.length}` : ""}</span></button>
+        <button className={dialog === "sources" ? "active" : ""} onClick={() => setDialog("sources")}><Plus weight="bold" /><span>來源</span></button>
+        <button className={dialog === "status" ? "active" : ""} onClick={() => setDialog("status")}><WifiHigh weight={dialog === "status" ? "fill" : "regular"} /><span>{mode === "live" ? "即時" : "展示"}</span></button>
+        <button className={dialog === "notifications" ? "active" : ""} onClick={() => setDialog("notifications")}><Bell weight={notificationsOn || dialog === "notifications" ? "fill" : "regular"} /><span>通知</span></button>
+      </nav>
 
       {dialog === "status" && <Modal title="即時來源狀態" onClose={() => setDialog(null)}>
         <div className="status-grid">
