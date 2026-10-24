@@ -12,6 +12,8 @@ export type FeedItem = {
   summary: string;
   /** summary 是否為 AI 產生的摘要 */
   aiSummary?: boolean;
+  /** AI 摘要依據：full＝讀過原文正文；title＝只有標題 */
+  summaryBasis?: "full" | "title";
   url: string;
   publishedAt: string;
   image?: string;
