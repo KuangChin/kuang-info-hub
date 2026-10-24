@@ -31,6 +31,7 @@ npm run dev
 在 Vercel 專案的 Settings → Environment Variables 加入 `ANTHROPIC_API_KEY`（本機放在 `.env.local`），重新部署後即生效。
 
 - 只處理「AI 世界新聞」分類中以英文為主的文章，中文新聞不會送出
+- RSS 內容太短時（如 Google 新聞只有標題），會先解出原始網址、抓取原文正文再摘要；被網站阻擋時改依標題整理，卡片標示「僅依標題」
 - 預設模型 `claude-haiku-5-5`，可用 `ANTHROPIC_MODEL` 更換
 - 每篇依網址、標題與內文快取，同一篇只摘要一次；載入時最多等 3.5 秒，未完成的會在背景完成，下次開啟即可看到
 - 若狀態視窗顯示金鑰未綁定工作區（workspace），請改用在工作區內建立的金鑰，或另外設定 `ANTHROPIC_WORKSPACE_ID`

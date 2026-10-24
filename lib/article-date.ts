@@ -29,14 +29,14 @@ async function validatePublicUrl(value: string) {
   return url;
 }
 
-async function fetchPublicHtml(initialUrl: string) {
+export async function fetchPublicHtml(initialUrl: string, timeoutMs = 5000) {
   let current = await validatePublicUrl(initialUrl);
   for (let redirects = 0; redirects <= 3; redirects += 1) {
     const response = await fetch(current, {
       redirect: "manual",
       cache: "no-store",
       headers: { "User-Agent": "Mozilla/5.0 (compatible; KuangInfoHub/0.1; personal news reader)" },
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
@@ -144,4 +144,29 @@ export async function resolveGoogleNewsDates(urls: string[]) {
     if (date) result.set(googleUrls[index], date);
   }));
   return result;
+}
+
+const decodedCache = new Map<string, { value?: string; expiresAt: number }>();
+
+/** 把 news.google.com 的轉址連結解回原始文章網址；非 Google 新聞連結原樣回傳。 */
+export async function originalArticleUrl(url: string) {
+  try {
+    if (new URL(url).hostname !== "news.google.com") return url;
+  } catch {
+    return undefined;
+  }
+  const cached = decodedCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  try {
+    const entry = await Promise.race([
+      decoder.decode(url),
+      new Promise<DecodeResult>((resolve) => setTimeout(() => resolve({ status: false }), 7000))
+    ]);
+    const value = entry.status && entry.decoded_url ? entry.decoded_url : undefined;
+    decodedCache.set(url, { value, expiresAt: Date.now() + (value ? SUCCESS_TTL : FAILURE_TTL) });
+    return value;
+  } catch {
+    decodedCache.set(url, { expiresAt: Date.now() + FAILURE_TTL });
+    return undefined;
+  }
 }
