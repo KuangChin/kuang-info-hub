@@ -25,6 +25,11 @@ export type FeedItem = {
   sig?: string;
   /** relevance 與 reason 是否由 AI 喜好排序產生 */
   aiRanked?: boolean;
+  /** 伺服器 AI 判斷：報導同一事件的新聞會有相同的 storyId */
+  storyId?: string;
+  /** 顯示用：被合併、沒有顯示出來的類似報導數量與來源 */
+  similarCount?: number;
+  similarSources?: string[];
 };
 
 export type CustomSource = {

@@ -38,8 +38,9 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const maxConcurrent = 4;
 let running = 0;
 const queue: Array<() => void> = [];
-async function limited<T>(task: () => Promise<T>): Promise<T> {
-  if (running >= maxConcurrent) await new Promise<void>((resolve) => queue.push(resolve));
+async function limited<T>(task: () => Promise<T>, priority = false): Promise<T> {
+  // priority 的請求插隊到最前面，避免被大量摘要請求卡住。
+  if (running >= maxConcurrent) await new Promise<void>((resolve) => priority ? queue.unshift(resolve) : queue.push(resolve));
   running += 1;
   try {
     return await task();
@@ -67,6 +68,7 @@ export async function callClaudeTool(options: {
   tool: ClaudeTool;
   maxTokens: number;
   timeoutMs?: number;
+  priority?: boolean;
 }): Promise<Record<string, unknown>> {
   return limited(async () => {
     const key = apiKey();
@@ -116,5 +118,5 @@ export async function callClaudeTool(options: {
       throw new ClaudeError(message, response.status);
     }
     throw new ClaudeError("Claude API 重試次數過多", 0);
-  });
+  }, options.priority);
 }

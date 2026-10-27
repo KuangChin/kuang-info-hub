@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { demoFeed } from "@/lib/demo-data";
 import { resolveGoogleNewsDates } from "@/lib/article-date";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
+import { attachStoryGroups } from "@/lib/ai-cluster";
 import { signFeedItems } from "@/lib/ai-rank";
 import { aiSummaryEnabled, attachSummaries, isMostlyEnglish, stripHtml, type SummaryInput } from "@/lib/ai-summary";
 import type { FeedCategory, FeedItem } from "@/lib/types";
@@ -151,9 +152,16 @@ export async function GET(request: NextRequest) {
       }
     });
   }
-  const summarized = inputs.size ? await attachSummaries(unique, inputs, summaryBudgetMs) : null;
-  if (summarized?.pending.length) after(() => Promise.allSettled(summarized.pending));
-  const items = summarized?.items ?? unique;
+  // 摘要與「同一事件」分組同時進行，共用同一段等待時間；來不及的在背景完成。
+  const clusterEnabled = aiSummaryEnabled() && live.length > 1;
+  const [summarized, clustered] = await Promise.all([
+    inputs.size ? attachSummaries(unique, inputs, summaryBudgetMs) : Promise.resolve(null),
+    clusterEnabled ? attachStoryGroups(unique, summaryBudgetMs) : Promise.resolve(null)
+  ]);
+  const background = [...(summarized?.pending ?? []), ...(clustered?.pending ? [clustered.pending] : [])];
+  if (background.length) after(() => Promise.allSettled(background));
+  const storyIds = new Map((clustered?.items ?? []).flatMap((item) => item.storyId ? [[item.id, item.storyId] as const] : []));
+  const items = (summarized?.items ?? unique).map((item) => storyIds.has(item.id) ? { ...item, storyId: storyIds.get(item.id) } : item);
 
   return NextResponse.json({
     items: signFeedItems(items),
@@ -168,6 +176,12 @@ export async function GET(request: NextRequest) {
       pending: summarized?.pending.length ?? 0,
       failed: summarized?.failed ?? 0,
       error: summarized?.error || undefined
+    },
+    aiCluster: {
+      enabled: clusterEnabled,
+      groups: clustered?.groups ?? 0,
+      pending: Boolean(clustered?.pending),
+      error: clustered?.error || undefined
     }
   });
 }
