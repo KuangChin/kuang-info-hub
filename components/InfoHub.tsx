@@ -43,6 +43,17 @@ type AiRankState = {
   error?: string;
 };
 
+type AiSocialStatus = { enabled: boolean; candidates: number; kept: number; dropped: number; pending: boolean; error?: string };
+
+function readSocialStatus(value: unknown): AiSocialStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const status = value as Record<string, unknown>;
+  return {
+    enabled: status.enabled === true, candidates: Number(status.candidates) || 0, kept: Number(status.kept) || 0,
+    dropped: Number(status.dropped) || 0, pending: status.pending === true, error: typeof status.error === "string" ? status.error : undefined
+  };
+}
+
 type AiClusterStatus = { enabled: boolean; groups: number; pending: boolean; error?: string };
 
 function readClusterStatus(value: unknown): AiClusterStatus | null {
@@ -161,6 +172,7 @@ export default function InfoHub() {
   const [pull, setPull] = useState(0);
   const [aiStatus, setAiStatus] = useState<AiSummaryStatus | null>(null);
   const [clusterStatus, setClusterStatus] = useState<AiClusterStatus | null>(null);
+  const [socialStatus, setSocialStatus] = useState<AiSocialStatus | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("recommended");
   const [aiRank, setAiRank] = useState<AiRankState>({ status: "idle", scores: {}, examples: 0 });
   const lastRankRequest = useRef("");
@@ -243,6 +255,7 @@ export default function InfoHub() {
       setDuplicateCount(Number(data.duplicateCount) || 0);
       setAiStatus(readAiStatus(data.aiSummary));
       setClusterStatus(readClusterStatus(data.aiCluster));
+      setSocialStatus(readSocialStatus(data.aiSocial));
       if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
       notifyNewItems(deduplicateFeedItems([...items, ...customItems]));
     } catch {
@@ -321,6 +334,7 @@ export default function InfoHub() {
         setDuplicateCount(Number(data.duplicateCount) || 0);
         setAiStatus(readAiStatus(data.aiSummary));
         setClusterStatus(readClusterStatus(data.aiCluster));
+        setSocialStatus(readSocialStatus(data.aiSocial));
         setUpdatedAt(data.updatedAt || new Date().toISOString());
         if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
         knownFeedIds.current = new Set([...items, ...customItems].map((item) => item.id));
@@ -656,6 +670,7 @@ export default function InfoHub() {
           <div><span>內建新聞來源</span><strong>{sourceCount} 個可用</strong></div>
           <div><span>自訂來源</span><strong>{customSources.length} 個</strong></div>
           <div><span>已合併重複／類似新聞</span><strong>{duplicateCount + mergedCount} 則</strong>{clusterStatus?.enabled && <small className="status-note">{clusterStatus.pending ? "AI 正在判斷同一事件…" : clusterStatus.error ? "AI 判斷失敗，僅用標題比對" : `AI 找出 ${clusterStatus.groups} 組同一事件`}</small>}{clusterStatus?.error && <small className="status-error">{clusterStatus.error}</small>}</div>
+          <div><span>社群熱門篩選</span><strong className={socialStatus?.enabled && !socialStatus.error ? "good" : "warn"}>{!socialStatus?.enabled ? "未啟用" : socialStatus.pending ? "AI 篩選中…" : socialStatus.error ? "篩選失敗，顯示全部" : `保留 ${socialStatus.kept} 則，濾掉 ${socialStatus.dropped} 則`}</strong>{socialStatus?.error && <small className="status-error">{socialStatus.error}</small>}</div>
           <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
           <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong>{aiStatus?.error && <small className="status-error">{aiStatus.error}</small>}</div>
           <div><span>AI 喜好排序</span><strong className={aiRank.status === "ready" ? "good" : "warn"}>{aiRank.status === "ready" ? `已依 ${aiRank.examples} 則回饋評分 ${Object.keys(aiRank.scores).length} 篇` : aiRank.status === "loading" ? "評分中…" : aiRank.status === "off" ? "未設定 API Key" : aiRank.status === "error" ? "評分失敗" : "先按讚或倒讚幾篇新聞"}</strong>{aiRank.error && <small className="status-error">{aiRank.error}</small>}</div>

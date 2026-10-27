@@ -5,6 +5,7 @@ import { demoFeed } from "@/lib/demo-data";
 import { resolveGoogleNewsDates } from "@/lib/article-date";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
 import { attachStoryGroups } from "@/lib/ai-cluster";
+import { filterTrendingSocial } from "@/lib/ai-social";
 import { signFeedItems } from "@/lib/ai-rank";
 import { aiSummaryEnabled, attachSummaries, isMostlyEnglish, stripHtml, type SummaryInput } from "@/lib/ai-summary";
 import type { FeedCategory, FeedItem } from "@/lib/types";
@@ -16,7 +17,8 @@ export const maxDuration = 60;
 /** 等待 AI 摘要的最長時間；來不及的會在背景完成，下次載入就看得到。 */
 const summaryBudgetMs = 3500;
 
-type Source = { name: string; category: FeedCategory; url: string; tags: string[] };
+// limit：每個來源取幾篇；trendingFilter：由 AI 只留下社群上正在爆紅／熱議的內容。
+type Source = { name: string; category: FeedCategory; url: string; tags: string[]; limit?: number; trendingFilter?: boolean };
 type CollectedItem = FeedItem & { excerpt: string };
 
 const sources: Source[] = [
@@ -31,7 +33,9 @@ const sources: Source[] = [
   { name: "OpenAI", category: "world", url: "https://openai.com/news/rss.xml", tags: ["AI 技術", "模型更新", "OpenAI"] },
   { name: "arXiv AI", category: "world", url: "https://export.arxiv.org/rss/cs.AI", tags: ["AI 論文", "研究", "arXiv"] },
   { name: "arXiv Machine Learning", category: "world", url: "https://export.arxiv.org/rss/cs.LG", tags: ["機器學習", "論文", "arXiv"] },
-  { name: "迷因趨勢", category: "social", url: "https://news.google.com/rss/search?q=%28%22%E7%A4%BE%E7%BE%A4%E7%82%B8%E9%8D%8B%22+OR+%22%E7%B6%B2%E8%B7%AF%E7%86%B1%E8%AD%B0%22+OR+%22%E8%BF%B7%E5%9B%A0%22%29+when%3A3d&hl=zh-TW&gl=TW&ceid=TW%3Azh-Hant", tags: ["社群", "迷因"] }
+  // Threads／IG 官方 API 無法直接取得熱門貼文，改抓媒體對兩個平台爆紅話題的報導，再由 AI 篩選。
+  { name: "Threads 熱議", category: "social", url: "https://news.google.com/rss/search?q=%28Threads%20OR%20%E8%84%86%E5%8F%8B%20OR%20%E8%84%86%E4%B8%8A%29%20%28%E7%B6%B2%E5%8F%8B%20OR%20%E7%86%B1%E8%AD%B0%20OR%20%E7%88%86%E7%B4%85%20OR%20%E7%98%8B%E5%82%B3%20OR%20%E7%AC%91%E7%BF%BB%20OR%20%E6%B4%97%E7%89%88%29%20-Meta%20-%E7%A5%96%E5%85%8B%E6%9F%8F%20when%3A2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["Threads", "社群"], limit: 12, trendingFilter: true },
+  { name: "IG 熱門", category: "social", url: "https://news.google.com/rss/search?q=%28IG%20OR%20Instagram%29%20%28%E7%B6%B2%E5%8F%8B%20OR%20%E7%88%86%E7%B4%85%20OR%20%E7%98%8B%E5%82%B3%20OR%20%E7%AC%91%E7%BF%BB%20OR%20%E6%B4%97%E7%89%88%20OR%20%E6%9B%AC%29%20-Meta%20-%E7%A5%96%E5%85%8B%E6%9F%8F%20when%3A2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["Instagram", "社群"], limit: 12, trendingFilter: true }
 ];
 
 const parser = new XMLParser({ ignoreAttributes: false });
@@ -104,7 +108,7 @@ async function collect(source: Source, forceRefresh = false): Promise<CollectedI
   const parsed = parser.parse(await response.text());
   const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item)
     .sort((left, right) => +new Date(right.pubDate || 0) - +new Date(left.pubDate || 0))
-    .slice(0, 8);
+    .slice(0, source.limit ?? 8);
   const [originalDates, arxivDates] = await Promise.all([
     resolveGoogleNewsDates(items.map((item) => item.link || "")),
     resolveArxivDates(items, forceRefresh)
@@ -154,21 +158,32 @@ export async function GET(request: NextRequest) {
   }
   // 摘要與「同一事件」分組同時進行，共用同一段等待時間；來不及的在背景完成。
   const clusterEnabled = aiSummaryEnabled() && live.length > 1;
-  const [summarized, clustered] = await Promise.all([
+  // 社群來源由 AI 篩選，只留下正在爆紅／熱議的內容。
+  const trendingSources = new Set(selected.filter((source) => source.trendingFilter).map((source) => source.name));
+  const socialIds = new Set(aiSummaryEnabled() && live.length ? unique.filter((item) => trendingSources.has(item.source)).map((item) => item.id) : []);
+  const [summarized, clustered, social] = await Promise.all([
     inputs.size ? attachSummaries(unique, inputs, summaryBudgetMs) : Promise.resolve(null),
-    clusterEnabled ? attachStoryGroups(unique, summaryBudgetMs) : Promise.resolve(null)
+    clusterEnabled ? attachStoryGroups(unique, summaryBudgetMs) : Promise.resolve(null),
+    socialIds.size ? filterTrendingSocial(unique, socialIds, summaryBudgetMs) : Promise.resolve(null)
   ]);
-  const background = [...(summarized?.pending ?? []), ...(clustered?.pending ? [clustered.pending] : [])];
+  const background = [
+    ...(summarized?.pending ?? []),
+    ...(clustered?.pending ? [clustered.pending] : []),
+    ...(social?.pending ? [social.pending] : [])
+  ];
   if (background.length) after(() => Promise.allSettled(background));
   const storyIds = new Map((clustered?.items ?? []).flatMap((item) => item.storyId ? [[item.id, item.storyId] as const] : []));
-  const items = (summarized?.items ?? unique).map((item) => storyIds.has(item.id) ? { ...item, storyId: storyIds.get(item.id) } : item);
+  const keptIds = social ? new Set(social.items.map((item) => item.id)) : null;
+  const items = (summarized?.items ?? unique)
+    .filter((item) => !keptIds || keptIds.has(item.id))
+    .map((item) => storyIds.has(item.id) ? { ...item, storyId: storyIds.get(item.id) } : item);
 
   return NextResponse.json({
     items: signFeedItems(items),
     mode: live.length ? "live" : "demo",
     updatedAt: new Date().toISOString(),
     sourceCount: settled.filter((result) => result.status === "fulfilled").length,
-    duplicateCount: rawItems.length - items.length,
+    duplicateCount: rawItems.length - unique.length,
     aiSummary: {
       enabled: aiSummaryEnabled(),
       eligible: inputs.size,
@@ -182,6 +197,14 @@ export async function GET(request: NextRequest) {
       groups: clustered?.groups ?? 0,
       pending: Boolean(clustered?.pending),
       error: clustered?.error || undefined
+    },
+    aiSocial: {
+      enabled: socialIds.size > 0,
+      candidates: socialIds.size,
+      kept: social?.kept ?? 0,
+      dropped: social?.dropped ?? 0,
+      pending: Boolean(social?.pending),
+      error: social?.error || undefined
     }
   });
 }
