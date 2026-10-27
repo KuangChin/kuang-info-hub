@@ -85,9 +85,20 @@ function preferenceProfile(feedback: FeedFeedback) {
   return { sources, categories, tags, terms };
 }
 
-export function rankFeedByPreferences(items: FeedItem[], feedback: FeedFeedback) {
+/** 規則式喜好分數（沒有 AI 評分時使用）。 */
+export function preferenceScores(items: FeedItem[], feedback: FeedFeedback, now = Date.now()) {
+  return new Map(scoreByPreferences(items, feedback, now).map(({ item, score }) => [item.id, score]));
+}
+
+export function rankFeedByPreferences(items: FeedItem[], feedback: FeedFeedback, now = Date.now()) {
+  return scoreByPreferences(items, feedback, now)
+    .sort((left, right) => right.score - left.score ||
+      +new Date(right.item.publishedAt) - +new Date(left.item.publishedAt))
+    .map(({ item }) => item);
+}
+
+function scoreByPreferences(items: FeedItem[], feedback: FeedFeedback, now: number) {
   const profile = preferenceProfile(feedback);
-  const now = Date.now();
 
   const ranked = items.map((item) => {
     const directFeedback = feedback[item.id]?.value || 0;
@@ -111,8 +122,5 @@ export function rankFeedByPreferences(items: FeedItem[], feedback: FeedFeedback)
     };
   });
 
-  return ranked
-    .sort((left, right) => right.score - left.score ||
-      +new Date(right.item.publishedAt) - +new Date(left.item.publishedAt))
-    .map(({ item }) => item);
+  return ranked;
 }

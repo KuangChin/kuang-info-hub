@@ -7,9 +7,9 @@ import {
   Newspaper, Plus, SlidersHorizontal, Sparkle, ThumbsDown, ThumbsUp, TrendUp, WifiHigh, X
 } from "@phosphor-icons/react";
 import { demoFeed } from "@/lib/demo-data";
-import { deduplicateFeedItems } from "@/lib/feed-dedupe";
+import { collapseSimilarStories, deduplicateFeedItems, groupSimilarStories } from "@/lib/feed-dedupe";
 import {
-  createFeedbackEntry, feedbackExamples, isFeedFeedback, rankFeedByPreferences,
+  createFeedbackEntry, feedbackExamples, isFeedFeedback, preferenceScores,
   type FeedbackValue, type FeedFeedback
 } from "@/lib/feed-preferences";
 import type { CustomSource, FeedCategory, FeedItem, MarketQuote } from "@/lib/types";
@@ -42,6 +42,14 @@ type AiRankState = {
   examples: number;
   error?: string;
 };
+
+type AiClusterStatus = { enabled: boolean; groups: number; pending: boolean; error?: string };
+
+function readClusterStatus(value: unknown): AiClusterStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const status = value as Record<string, unknown>;
+  return { enabled: status.enabled === true, groups: Number(status.groups) || 0, pending: status.pending === true, error: typeof status.error === "string" ? status.error : undefined };
+}
 
 type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; pending: number; failed: number; error?: string };
 
@@ -152,6 +160,7 @@ export default function InfoHub() {
   const knownFeedIds = useRef<Set<string>>(new Set());
   const [pull, setPull] = useState(0);
   const [aiStatus, setAiStatus] = useState<AiSummaryStatus | null>(null);
+  const [clusterStatus, setClusterStatus] = useState<AiClusterStatus | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("recommended");
   const [aiRank, setAiRank] = useState<AiRankState>({ status: "idle", scores: {}, examples: 0 });
   const lastRankRequest = useRef("");
@@ -161,6 +170,9 @@ export default function InfoHub() {
     [...baseFeed, ...customFeed].forEach((item) => unique.set(item.id, item));
     return deduplicateFeedItems([...unique.values()]);
   }, [baseFeed, customFeed]);
+  // 報導同一事件的新聞歸成同一組（AI 判斷＋標題比對），顯示時每組只留最高分的一則。
+  const storyGroups = useMemo(() => groupSimilarStories(feed), [feed]);
+  const mergedCount = feed.length - new Set(storyGroups.values()).size;
 
   async function fetchCustomSources(sources: CustomSource[]) {
     if (!sources.length) {
@@ -230,6 +242,7 @@ export default function InfoHub() {
       setUpdatedAt(data.updatedAt || new Date().toISOString());
       setDuplicateCount(Number(data.duplicateCount) || 0);
       setAiStatus(readAiStatus(data.aiSummary));
+      setClusterStatus(readClusterStatus(data.aiCluster));
       if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
       notifyNewItems(deduplicateFeedItems([...items, ...customItems]));
     } catch {
@@ -307,6 +320,7 @@ export default function InfoHub() {
         setSourceCount(Number(data.sourceCount) || 0);
         setDuplicateCount(Number(data.duplicateCount) || 0);
         setAiStatus(readAiStatus(data.aiSummary));
+        setClusterStatus(readClusterStatus(data.aiCluster));
         setUpdatedAt(data.updatedAt || new Date().toISOString());
         if (data.mode === "live") writeFeedCache({ items, updatedAt: data.updatedAt || new Date().toISOString(), sourceCount: Number(data.sourceCount) || 0, duplicateCount: Number(data.duplicateCount) || 0 });
         knownFeedIds.current = new Set([...items, ...customItems].map((item) => item.id));
@@ -513,31 +527,31 @@ export default function InfoHub() {
       const queryMatch = !q || [item.title, item.titleZh || "", item.summary, item.source, ...item.tags].join(" ").toLowerCase().includes(q);
       return categoryMatch && bookmarkMatch && queryMatch;
     });
-    if (sortMode === "latest") {
-      return filtered
-        .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
-        .slice(0, 10);
-    }
-    const scored = Object.keys(aiRank.scores).length > 0;
-    if (!scored) return rankFeedByPreferences(filtered, feedback).slice(0, 10);
-
-    // AI 分數為主，加上直接回饋與新鮮度；尚未評分的新聞給中間分數。
+    // 每篇都先算分數：有 AI 評分時以 AI 為主，否則用規則式喜好分數。
     // 以最後更新時間為基準計算新鮮度，排序結果才穩定。
     const now = new Date(updatedAt).getTime() || 0;
-    return filtered
-      .map((item) => {
-        const ai = aiRank.scores[item.id];
-        const direct = feedback[item.id]?.value || 0;
-        const ageHours = Math.max(0, (now - new Date(item.publishedAt).getTime()) / 3_600_000);
-        const freshness = Number.isFinite(ageHours) ? Math.max(0, 10 - ageHours / 6) : 0;
-        const score = (ai ? ai.score : 50) + freshness + (direct === 1 ? 20 : direct === -1 ? -100 : 0);
-        const ranked: FeedItem = ai ? { ...item, relevance: ai.score, reason: ai.reason || item.reason, aiRanked: true } : item;
-        return { item: ranked, score };
-      })
-      .sort((left, right) => right.score - left.score || +new Date(right.item.publishedAt) - +new Date(left.item.publishedAt))
+    const hasAi = Object.keys(aiRank.scores).length > 0;
+    const ruleScores = hasAi ? null : preferenceScores(filtered, feedback, now);
+    const scored = filtered.map((item) => {
+      if (!hasAi) return { item, score: ruleScores?.get(item.id) ?? item.relevance };
+      const ai = aiRank.scores[item.id];
+      const direct = feedback[item.id]?.value || 0;
+      const ageHours = Math.max(0, (now - new Date(item.publishedAt).getTime()) / 3_600_000);
+      const freshness = Number.isFinite(ageHours) ? Math.max(0, 10 - ageHours / 6) : 0;
+      // 尚未評分的新聞給中間分數。
+      const score = (ai ? ai.score : 50) + freshness + (direct === 1 ? 20 : direct === -1 ? -100 : 0);
+      const ranked: FeedItem = ai ? { ...item, relevance: ai.score, reason: ai.reason || item.reason, aiRanked: true } : item;
+      return { item: ranked, score };
+    });
+
+    // 重複或類似的新聞每組只留最高分的一則；收藏頁照原樣顯示。
+    const picked = bookmarkedOnly ? scored : collapseSimilarStories(scored, storyGroups);
+    const byTime = (left: { item: FeedItem }, right: { item: FeedItem }) => +new Date(right.item.publishedAt) - +new Date(left.item.publishedAt);
+    return picked
+      .sort((left, right) => sortMode === "latest" ? byTime(left, right) : right.score - left.score || byTime(left, right))
       .slice(0, 10)
       .map(({ item }) => item);
-  }, [feed, active, query, bookmarkedOnly, bookmarks, sortMode, aiRank.scores, feedback, updatedAt]);
+  }, [feed, active, query, bookmarkedOnly, bookmarks, sortMode, aiRank.scores, feedback, updatedAt, storyGroups]);
   const feedbackCount = Object.keys(feedback).length;
   const selectedQuotes = useMemo(() => selectedSymbols.flatMap((symbol) => {
     const quote = quotes.find((item) => item.symbol === symbol);
@@ -612,7 +626,7 @@ export default function InfoHub() {
               <div className="feed-list">{visibleFeed.length ? visibleFeed.map((item) => {
                 const meta = categoryMeta[item.category]; const saved = bookmarks.includes(item.id); const articleUrl = originalArticleUrl(item.url); const rating = feedback[item.id]?.value; const published = articleTime(item.publishedAt, updatedAt);
                 return <article className="feed-card" key={`${item.category}:${item.id}:${item.url}`}><div className="feed-accent" data-category={item.category} /><div className="feed-content">
-                  <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock /><time dateTime={item.publishedAt} title={published.exact}>{published.label}</time></span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}</div>
+                  <div className="feed-meta"><span className={`category-pill ${meta.className}`}>{meta.label}</span><span>{item.source}</span><i>•</i><span><Clock /><time dateTime={item.publishedAt} title={published.exact}>{published.label}</time></span>{item.breaking && <b><Fire weight="fill" /> 即時</b>}{!!item.similarCount && <em className="similar-count" title={item.similarSources?.length ? `也有報導：${item.similarSources.join("、")}` : undefined}>＋{item.similarCount} 則類似</em>}</div>
                   <a href={articleUrl} target="_blank" rel="noreferrer"><h3>{item.titleZh || item.title}</h3>{item.titleZh && <span className="original-title" lang="en">{item.title}</span>}</a>{item.aiSummary ? <div className="ai-summary"><span className="ai-badge"><Sparkle weight="fill" />AI 摘要{item.summaryBasis === "title" && <em>僅依標題</em>}</span><p>{item.summary}</p></div> : <p>{item.summary}</p>}
                   <div className="feed-footer"><div className="tags">{item.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div><div className="card-actions"><span className="relevance">{item.relevance}% 相關</span><span className="feedback-actions" aria-label="偏好回饋"><button onClick={() => rateItem(item, 1)} className={rating === 1 ? "liked" : ""} aria-label="這篇有命中我的喜好" title="有命中"><ThumbsUp weight={rating === 1 ? "fill" : "regular"} /></button><button onClick={() => rateItem(item, -1)} className={rating === -1 ? "disliked" : ""} aria-label="這篇沒有命中我的喜好" title="沒命中"><ThumbsDown weight={rating === -1 ? "fill" : "regular"} /></button></span><button onClick={() => toggleBookmark(item.id)} className={saved ? "saved" : ""} aria-label="收藏">{saved ? <BookmarkSimple weight="fill" /> : <BookmarkSimple />}</button><a href={articleUrl} target="_blank" rel="noreferrer" aria-label="開啟原文"><ArrowSquareOut /></a></div></div>
                   {item.reason && <div className={`reason ${item.aiRanked ? "ai" : ""}`}><Sparkle weight="fill" /><span>{item.aiRanked && <b>AI 推薦 {item.relevance}</b>}{item.reason}</span></div>}
@@ -641,7 +655,7 @@ export default function InfoHub() {
           <div><span>新聞模式</span><strong className={mode === "live" ? "good" : "warn"}>{mode === "live" ? "即時" : "展示備援"}</strong></div>
           <div><span>內建新聞來源</span><strong>{sourceCount} 個可用</strong></div>
           <div><span>自訂來源</span><strong>{customSources.length} 個</strong></div>
-          <div><span>已過濾重複新聞</span><strong>{duplicateCount} 則</strong></div>
+          <div><span>已合併重複／類似新聞</span><strong>{duplicateCount + mergedCount} 則</strong>{clusterStatus?.enabled && <small className="status-note">{clusterStatus.pending ? "AI 正在判斷同一事件…" : clusterStatus.error ? "AI 判斷失敗，僅用標題比對" : `AI 找出 ${clusterStatus.groups} 組同一事件`}</small>}{clusterStatus?.error && <small className="status-error">{clusterStatus.error}</small>}</div>
           <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
           <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong>{aiStatus?.error && <small className="status-error">{aiStatus.error}</small>}</div>
           <div><span>AI 喜好排序</span><strong className={aiRank.status === "ready" ? "good" : "warn"}>{aiRank.status === "ready" ? `已依 ${aiRank.examples} 則回饋評分 ${Object.keys(aiRank.scores).length} 篇` : aiRank.status === "loading" ? "評分中…" : aiRank.status === "off" ? "未設定 API Key" : aiRank.status === "error" ? "評分失敗" : "先按讚或倒讚幾篇新聞"}</strong>{aiRank.error && <small className="status-error">{aiRank.error}</small>}</div>
