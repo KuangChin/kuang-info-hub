@@ -8,6 +8,7 @@
 - AI 技術來源：Anthropic（Google 新聞搜尋）、Hugging Face、Google DeepMind、OpenAI 與 arXiv AI／機器學習
 - 關鍵字搜尋與分類篩選
 - 自選市場快照（台股取自 TWSE、美股取自 NASDAQ，顯示來源與更新時間）
+- 點股票卡片可看最近 7 天的相關新聞（Google 新聞搜尋公司名稱），重複／同一事件的報導只留一則
 - 新聞收藏（瀏覽器 localStorage）
 - 「推薦／最新」切換：推薦模式由 Claude 依你的讚／倒讚為新聞評分並寫出推薦原因（未設定金鑰時改用規則排序）
 - 新聞時間以伺服器更新時間計算，超過一天會同時顯示實際月日
@@ -65,6 +66,7 @@ npm run dev
 - `GET /api/feed?category=nba`：取得指定分類
 - `GET /api/market`：市場快照
 - `POST /api/rank`：AI 喜好評分
+- `GET /api/stock-news?symbol=2330`：個股相關新聞（只接受市場快照支援的代號）
 
 ## 下一階段
 

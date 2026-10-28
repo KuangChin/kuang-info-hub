@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowSquareOut, ArrowsClockwise, Basketball, Bell, BookmarkSimple, ChartLineUp,
+  ArrowSquareOut, ArrowsClockwise, Basketball, Bell, BookmarkSimple, CaretRight, ChartLineUp,
   Check, Clock, Fire, GameController, GlobeHemisphereWest, House, MagnifyingGlass,
   Newspaper, Plus, SlidersHorizontal, Sparkle, ThumbsDown, ThumbsUp, TrendUp, WifiHigh, X
 } from "@phosphor-icons/react";
@@ -32,7 +32,8 @@ const categoryMeta: Record<FeedCategory, { label: string; className: string }> =
 };
 
 const defaultMarketSymbols = ["TAIEX", "2330", "2454", "2327", "NVDA"];
-type Dialog = "status" | "notifications" | "sources" | null;
+type Dialog = "status" | "notifications" | "sources" | "stock" | null;
+type StockNews = { status: "loading" | "ready" | "error"; items: FeedItem[]; merged: number; moreUrl?: string; error?: string; fetchedAt: number };
 
 type NotificationSettings = { enabled: boolean; keywords: string };
 type SortMode = "recommended" | "latest";
@@ -173,6 +174,8 @@ export default function InfoHub() {
   const [aiStatus, setAiStatus] = useState<AiSummaryStatus | null>(null);
   const [clusterStatus, setClusterStatus] = useState<AiClusterStatus | null>(null);
   const [socialStatus, setSocialStatus] = useState<AiSocialStatus | null>(null);
+  const [stockSymbol, setStockSymbol] = useState<string | null>(null);
+  const [stockNews, setStockNews] = useState<Record<string, StockNews>>({});
   const [sortMode, setSortMode] = useState<SortMode>("recommended");
   const [aiRank, setAiRank] = useState<AiRankState>({ status: "idle", scores: {}, examples: 0 });
   const lastRankRequest = useRef("");
@@ -447,6 +450,31 @@ export default function InfoHub() {
     }
   }
 
+  function openStockNews(symbol: string, force = false) {
+    setStockSymbol(symbol);
+    setDialog("stock");
+    const cached = stockNews[symbol];
+    const openedAt = new Date().getTime();
+    // 5 分鐘內重開直接用上次的結果。
+    if (!force && cached && (cached.status === "loading" || (cached.status === "ready" && openedAt - cached.fetchedAt < 5 * 60 * 1000))) return;
+    setStockNews((current) => ({ ...current, [symbol]: { status: "loading", items: current[symbol]?.items ?? [], merged: 0, fetchedAt: openedAt } }));
+    fetch(`/api/stock-news?symbol=${encodeURIComponent(symbol)}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "無法取得相關新聞");
+        setStockNews((current) => ({ ...current, [symbol]: {
+          status: "ready",
+          items: Array.isArray(data.items) ? data.items : [],
+          merged: Number(data.merged) || 0,
+          moreUrl: typeof data.moreUrl === "string" ? data.moreUrl : undefined,
+          fetchedAt: new Date().getTime()
+        } }));
+      })
+      .catch((error) => {
+        setStockNews((current) => ({ ...current, [symbol]: { status: "error", items: [], merged: 0, error: error instanceof Error ? error.message : "無法取得相關新聞", fetchedAt: new Date().getTime() } }));
+      });
+  }
+
   function toggleBookmark(id: string) {
     setBookmarks((current) => {
       const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
@@ -622,11 +650,23 @@ export default function InfoHub() {
               <select value={stockToAdd} onChange={(event) => setStockToAdd(event.target.value)}><option value="">選擇股票…</option>{availableQuotes.map((quote) => <option key={quote.symbol} value={quote.symbol}>{quote.symbol}　{quote.name}</option>)}</select>
               <button onClick={addStock} disabled={!stockToAdd}><Plus weight="bold" />加入</button>
             </div>}
-            <div className="quote-grid">{selectedQuotes.map((quote) => <article className="quote-card" key={quote.symbol}>
+            <div className="quote-grid">{selectedQuotes.map((quote) => <article
+              className={`quote-card ${marketManager ? "" : "clickable"}`}
+              key={quote.symbol}
+              {...(marketManager ? {} : {
+                role: "button",
+                tabIndex: 0,
+                "aria-label": `查看 ${quote.symbol} ${quote.name} 相關新聞`,
+                onClick: () => openStockNews(quote.symbol),
+                onKeyDown: (event: React.KeyboardEvent) => {
+                  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openStockNews(quote.symbol); }
+                }
+              })}
+            >
               {marketManager && <button className="remove-quote" onClick={() => removeStock(quote.symbol)} aria-label={`移除 ${quote.name}`}><X /></button>}
               <div className="quote-top"><div><span>{quote.symbol}</span><small>{quote.name}</small></div><Sparkline data={quote.sparkline} positive={quote.change >= 0} /></div>
               <div className="quote-bottom"><strong>{quote.currency === "USD" ? "$" : ""}{quote.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong><span className={quote.change >= 0 ? "up" : "down"}>{quote.change >= 0 ? "+" : ""}{quote.change.toFixed(2)}　{quote.changePercent >= 0 ? "+" : ""}{quote.changePercent.toFixed(2)}%</span></div>
-              <div className="quote-source"><span>{quote.source} · {quote.currency}</span><time>{quoteTime(quote.asOf)}</time></div>
+              <div className="quote-source"><span>{quote.source} · <time>{quoteTime(quote.asOf)}</time></span>{!marketManager && <em className="quote-news-hint"><Newspaper />新聞<CaretRight weight="bold" /></em>}</div>
             </article>)}</div>
             {marketLoading && <div className="market-empty">正在讀取官方行情…</div>}
             {!marketLoading && !selectedQuotes.length && <div className="market-empty">目前沒有可顯示的官方行情，系統不會使用估算價格。</div>}
@@ -663,6 +703,30 @@ export default function InfoHub() {
         <button className={dialog === "status" ? "active" : ""} onClick={() => setDialog("status")}><WifiHigh weight={dialog === "status" ? "fill" : "regular"} /><span>{mode === "live" ? "即時" : "展示"}</span></button>
         <button className={dialog === "notifications" ? "active" : ""} onClick={() => setDialog("notifications")}><Bell weight={notificationsOn || dialog === "notifications" ? "fill" : "regular"} /><span>通知</span></button>
       </nav>
+
+      {dialog === "stock" && stockSymbol && (() => {
+        const quote = quotes.find((item) => item.symbol === stockSymbol);
+        const news = stockNews[stockSymbol];
+        return <Modal title={`${quote?.name || stockSymbol} 相關新聞`} onClose={() => setDialog(null)}>
+          {quote && <div className="stock-head">
+            <div><span>{quote.symbol}</span><strong>{quote.currency === "USD" ? "$" : ""}{quote.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong><em className={quote.change >= 0 ? "up" : "down"}>{quote.change >= 0 ? "+" : ""}{quote.change.toFixed(2)}（{quote.changePercent >= 0 ? "+" : ""}{quote.changePercent.toFixed(2)}%）</em><small>{quote.source} · {quoteTime(quote.asOf)}</small></div>
+            <Sparkline data={quote.sparkline} positive={quote.change >= 0} />
+          </div>}
+          {(!news || news.status === "loading") && !news?.items.length && <div className="stock-news-empty"><ArrowsClockwise className="spin" />正在搜尋最近 7 天的相關新聞…</div>}
+          {news?.status === "error" && <div className="stock-news-empty error"><p>{news.error}</p><button onClick={() => openStockNews(stockSymbol, true)}><ArrowsClockwise />重試</button></div>}
+          {news?.status === "ready" && !news.items.length && <div className="stock-news-empty">最近 7 天沒有找到相關新聞。</div>}
+          {!!news?.items.length && <ul className="stock-news-list">
+            {news.items.map((item) => {
+              const published = articleTime(item.publishedAt, new Date(news.fetchedAt).toISOString());
+              return <li key={item.id}><a href={originalArticleUrl(item.url)} target="_blank" rel="noreferrer">
+                <span className="stock-news-meta">{item.source}<i>•</i><time dateTime={item.publishedAt} title={published.exact}>{published.label}</time>{!!item.similarCount && <em>＋{item.similarCount} 則類似</em>}</span>
+                <strong>{item.title}</strong>
+              </a></li>;
+            })}
+          </ul>}
+          {news?.status === "ready" && <p className="dialog-note">最近 7 天 · 依時間排序{news.merged ? ` · 已合併 ${news.merged} 則重複／類似報導` : ""}{news.moreUrl && <> · <a href={news.moreUrl} target="_blank" rel="noreferrer">在 Google 新聞看更多</a></>}</p>}
+        </Modal>;
+      })()}
 
       {dialog === "status" && <Modal title="即時來源狀態" onClose={() => setDialog(null)}>
         <div className="status-grid">
