@@ -12,7 +12,8 @@ import type { FeedCategory, FeedItem } from "@/lib/types";
 
 export const revalidate = 600;
 // 留時間給背景摘要（after）完成並寫入快取。
-export const maxDuration = 60;
+// 重點整理的輸出較長，留更多時間給背景摘要（after）完成並寫入快取。
+export const maxDuration = 120;
 
 /** 等待 AI 摘要的最長時間；來不及的會在背景完成，下次載入就看得到。 */
 const summaryBudgetMs = 3500;

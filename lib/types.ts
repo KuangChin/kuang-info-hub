@@ -14,6 +14,10 @@ export type FeedItem = {
   aiSummary?: boolean;
   /** AI 摘要依據：full＝讀過原文正文；title＝只有標題 */
   summaryBasis?: "full" | "title";
+  /** AI 重點整理 */
+  keyPoints?: string[];
+  techConcepts?: Array<{ term: string; explanation: string }>;
+  whyItMatters?: string;
   url: string;
   publishedAt: string;
   image?: string;

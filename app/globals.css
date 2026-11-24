@@ -148,3 +148,26 @@ main { min-height:100vh; margin-left:234px; }
   .stock-news-meta{font-size:12px}.stock-news-empty{font-size:14px}
 }
 .quote-source>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.quote-news-hint{flex-shrink:0;white-space:nowrap;margin-left:6px}
+
+/* Expandable AI key points / tech concepts */
+.ai-details{margin-top:8px;border-top:1px solid rgba(155,135,245,.16)}
+.ai-details>summary{list-style:none;display:flex;align-items:center;gap:5px;padding:8px 0 2px;color:#b9aafd;font-size:10px;font-weight:600;cursor:pointer;user-select:none}
+.ai-details>summary::-webkit-details-marker{display:none}
+.ai-details>summary svg{width:11px;height:11px;transition:transform .2s}
+.ai-details[open]>summary svg{transform:rotate(90deg)}
+.ai-details[open]>summary span::after{content:"（收合）";color:#7d8a96;font-weight:400}
+.ai-details section{margin-top:10px}
+.ai-details h4{margin:0 0 6px;color:#c7bbff;font-size:10px;letter-spacing:.3px}
+.ai-details ul{margin:0;padding-left:16px;color:#aab4be;font-size:11px;line-height:1.7}
+.ai-details li+li{margin-top:3px}
+.ai-details dl{margin:0;display:flex;flex-direction:column;gap:8px}
+.ai-details dl>div{padding:8px 10px;border-radius:8px;background:rgba(155,135,245,.06)}
+.ai-details dt{color:#e3dcff;font-size:11px;font-weight:700}
+.ai-details dd{margin:4px 0 0;color:#aab4be;font-size:11px;line-height:1.7}
+.ai-details section>p{margin:0;color:#aab4be;font-size:11px;line-height:1.7}
+@media(max-width:760px){
+  .ai-details>summary{min-height:40px;font-size:14px;padding-top:6px}.ai-details>summary svg{width:14px;height:14px}
+  .ai-details h4{font-size:13px}
+  .ai-details ul,.ai-details dd,.ai-details section>p{font-size:14.5px;line-height:1.75}
+  .ai-details dt{font-size:14.5px}.ai-details dl>div{padding:10px 12px}
+}
