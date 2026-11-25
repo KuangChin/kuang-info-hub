@@ -7,7 +7,7 @@ import { signFeedItems } from "@/lib/ai-rank";
 import type { CustomSource, FeedCategory, FeedItem } from "@/lib/types";
 
 const parser = new XMLParser({ ignoreAttributes: false });
-const categories = new Set<FeedCategory>(["market", "finance", "world", "nba", "gaming", "social"]);
+const categories = new Set<FeedCategory>(["market", "finance", "world", "aitools", "nba", "gaming", "social"]);
 
 function arrayOf<T>(value: T | T[] | undefined): T[] {
   if (!value) return [];

@@ -1,4 +1,5 @@
-export type FeedCategory = "market" | "finance" | "world" | "nba" | "gaming" | "social";
+/** aitools：AI 產品與工具的新功能（例如 Claude Code、ChatGPT、Gemini） */
+export type FeedCategory = "market" | "finance" | "world" | "aitools" | "nba" | "gaming" | "social";
 
 export type FeedItem = {
   id: string;

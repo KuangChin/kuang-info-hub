@@ -171,3 +171,4 @@ main { min-height:100vh; margin-left:234px; }
   .ai-details ul,.ai-details dd,.ai-details section>p{font-size:14.5px;line-height:1.75}
   .ai-details dt{font-size:14.5px}.ai-details dl>div{padding:10px 12px}
 }
+.feed-accent[data-category=aitools]{background:#f5c451}.category-pill.aitools{color:#f7d27a;background:rgba(245,196,81,.11)}
