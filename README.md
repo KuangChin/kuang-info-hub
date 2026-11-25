@@ -6,6 +6,7 @@
 
 - 六大情報分類與即時 RSS 聚合
 - AI 技術來源：Anthropic（Google 新聞搜尋）、Hugging Face、Google DeepMind、OpenAI 與 arXiv AI／機器學習
+- 「AI 新功能」分頁：Claude 官網公告（解析文章列表）、Claude Code 版本更新（GitHub Releases）、英文與中文的 AI 產品新功能報導（Claude、ChatGPT、Codex、Gemini、Cursor、Copilot）
 - 關鍵字搜尋與分類篩選
 - 自選市場快照（台股取自 TWSE、美股取自 NASDAQ，顯示來源與更新時間）
 - 點股票卡片可看最近 7 天的相關新聞（Google 新聞搜尋公司名稱），重複／同一事件的報導只留一則

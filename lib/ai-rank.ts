@@ -43,7 +43,7 @@ export function verifyCandidate(candidate: RankCandidate) {
 }
 
 const categoryLabels: Record<FeedCategory, string> = {
-  market: "台股", finance: "財經", world: "AI／科技", nba: "NBA", gaming: "遊戲", social: "社群"
+  market: "台股", finance: "財經", world: "AI／科技", aitools: "AI 新功能", nba: "NBA", gaming: "遊戲", social: "社群"
 };
 
 const clean = (value: string) => value.replace(/\s+/g, " ").trim().slice(0, maxTitle);

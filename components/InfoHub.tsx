@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut, ArrowsClockwise, Basketball, Bell, BookmarkSimple, CaretRight, ChartLineUp,
   Check, Clock, Fire, GameController, GlobeHemisphereWest, House, MagnifyingGlass,
-  Newspaper, Plus, SlidersHorizontal, Sparkle, ThumbsDown, ThumbsUp, TrendUp, WifiHigh, X
+  Newspaper, Plus, Rocket, SlidersHorizontal, Sparkle, ThumbsDown, ThumbsUp, TrendUp, WifiHigh, X
 } from "@phosphor-icons/react";
 import { demoFeed } from "@/lib/demo-data";
 import { collapseSimilarStories, deduplicateFeedItems, groupSimilarStories } from "@/lib/feed-dedupe";
@@ -20,6 +20,7 @@ const categories: Array<{ id: "all" | FeedCategory; label: string; icon: typeof 
   { id: "market", label: "台股盤勢", icon: ChartLineUp },
   { id: "finance", label: "財經新聞", icon: Newspaper },
   { id: "world", label: "AI 世界新聞", icon: GlobeHemisphereWest },
+  { id: "aitools", label: "AI 新功能", icon: Rocket },
   { id: "nba", label: "NBA", icon: Basketball },
   { id: "gaming", label: "MMORPG", icon: GameController },
   { id: "social", label: "社群熱門", icon: Fire }
@@ -27,7 +28,7 @@ const categories: Array<{ id: "all" | FeedCategory; label: string; icon: typeof 
 
 const categoryMeta: Record<FeedCategory, { label: string; className: string }> = {
   market: { label: "市場", className: "market" }, finance: { label: "財經", className: "finance" },
-  world: { label: "全球 AI", className: "world" }, nba: { label: "NBA", className: "nba" },
+  world: { label: "全球 AI", className: "world" }, aitools: { label: "新功能", className: "aitools" }, nba: { label: "NBA", className: "nba" },
   gaming: { label: "遊戲", className: "gaming" }, social: { label: "社群", className: "social" }
 };
 

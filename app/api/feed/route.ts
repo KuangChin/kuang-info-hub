@@ -2,7 +2,8 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { createHash } from "node:crypto";
 import { demoFeed } from "@/lib/demo-data";
-import { resolveGoogleNewsDates } from "@/lib/article-date";
+import { extractArticleDate, fetchPublicHtml, resolveGoogleNewsDates } from "@/lib/article-date";
+import { parseClaudeArticles, parseFeedEntries, type SourceEntry } from "@/lib/source-parsers";
 import { deduplicateFeedItems } from "@/lib/feed-dedupe";
 import { attachStoryGroups } from "@/lib/ai-cluster";
 import { filterTrendingSocial } from "@/lib/ai-social";
@@ -19,7 +20,11 @@ export const maxDuration = 120;
 const summaryBudgetMs = 3500;
 
 // limit：每個來源取幾篇；trendingFilter：由 AI 只留下社群上正在爆紅／熱議的內容。
-type Source = { name: string; category: FeedCategory; url: string; tags: string[]; limit?: number; trendingFilter?: boolean };
+// format：feed＝RSS／Atom；claude-articles＝解析 Claude 官網文章列表（沒有 RSS）。titlePrefix：標題前綴（例如版本號前加產品名）。
+type Source = {
+  name: string; category: FeedCategory; url: string; tags: string[];
+  limit?: number; trendingFilter?: boolean; format?: "feed" | "claude-articles"; titlePrefix?: string;
+};
 type CollectedItem = FeedItem & { excerpt: string };
 
 const sources: Source[] = [
@@ -34,6 +39,11 @@ const sources: Source[] = [
   { name: "OpenAI", category: "world", url: "https://openai.com/news/rss.xml", tags: ["AI 技術", "模型更新", "OpenAI"] },
   { name: "arXiv AI", category: "world", url: "https://export.arxiv.org/rss/cs.AI", tags: ["AI 論文", "研究", "arXiv"] },
   { name: "arXiv Machine Learning", category: "world", url: "https://export.arxiv.org/rss/cs.LG", tags: ["機器學習", "論文", "arXiv"] },
+  // AI 產品與工具的新功能：官方公告與更新紀錄，加上媒體對新功能的報導。
+  { name: "Claude 官方", category: "aitools", url: "https://claude.com/resources/articles", tags: ["Claude", "新功能", "Anthropic"], format: "claude-articles", limit: 8 },
+  { name: "Claude Code 更新", category: "aitools", url: "https://github.com/anthropics/claude-code/releases.atom", tags: ["Claude Code", "更新紀錄"], titlePrefix: "Claude Code ", limit: 3 },
+  { name: "AI 產品動態", category: "aitools", url: "https://news.google.com/rss/search?q=%28Claude%20OR%20%22Claude%20Code%22%20OR%20ChatGPT%20OR%20Codex%20OR%20Gemini%20OR%20Cursor%20OR%20Copilot%29%20%28%22new%20feature%22%20OR%20launches%20OR%20%22rolls%20out%22%20OR%20introduces%29%20when%3A7d&hl=en-US&gl=US&ceid=US:en", tags: ["AI 工具", "新功能"] },
+  { name: "AI 新功能（中文）", category: "aitools", url: "https://news.google.com/rss/search?q=%28Claude%20OR%20ChatGPT%20OR%20Gemini%20OR%20Codex%20OR%20Cursor%20OR%20Copilot%29%20%28%E6%96%B0%E5%8A%9F%E8%83%BD%20OR%20%E6%8E%A8%E5%87%BA%20OR%20%E4%B8%8A%E7%B7%9A%20OR%20%E7%99%BC%E8%A1%A8%29%20when%3A7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["AI 工具", "新功能"] },
   // Threads／IG 官方 API 無法直接取得熱門貼文，改抓媒體對兩個平台爆紅話題的報導，再由 AI 篩選。
   { name: "Threads 熱議", category: "social", url: "https://news.google.com/rss/search?q=%28Threads%20OR%20%E8%84%86%E5%8F%8B%20OR%20%E8%84%86%E4%B8%8A%29%20%28%E7%B6%B2%E5%8F%8B%20OR%20%E7%86%B1%E8%AD%B0%20OR%20%E7%88%86%E7%B4%85%20OR%20%E7%98%8B%E5%82%B3%20OR%20%E7%AC%91%E7%BF%BB%20OR%20%E6%B4%97%E7%89%88%29%20-Meta%20-%E7%A5%96%E5%85%8B%E6%9F%8F%20when%3A2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["Threads", "社群"], limit: 12, trendingFilter: true },
   { name: "IG 熱門", category: "social", url: "https://news.google.com/rss/search?q=%28IG%20OR%20Instagram%29%20%28%E7%B6%B2%E5%8F%8B%20OR%20%E7%88%86%E7%B4%85%20OR%20%E7%98%8B%E5%82%B3%20OR%20%E7%AC%91%E7%BF%BB%20OR%20%E6%B4%97%E7%89%88%20OR%20%E6%9B%AC%29%20-Meta%20-%E7%A5%96%E5%85%8B%E6%9F%8F%20when%3A2d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", tags: ["Instagram", "社群"], limit: 12, trendingFilter: true }
@@ -44,15 +54,6 @@ const parser = new XMLParser({ ignoreAttributes: false });
 function arrayOf<T>(value: T | T[] | undefined): T[] {
   if (!value) return [];
   return Array.isArray(value) ? value : [value];
-}
-
-function textOf(value: unknown): string {
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  if (value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return textOf(object["#text"] ?? object.__cdata ?? "");
-  }
-  return "";
 }
 
 function cleanTitle(value: string) {
@@ -99,35 +100,58 @@ async function resolveArxivDates(items: Array<Record<string, string>>, forceRefr
   return dates;
 }
 
-async function collect(source: Source, forceRefresh = false): Promise<CollectedItem[]> {
-  const response = await fetch(source.url, {
+async function fetchSourceText(url: string, forceRefresh: boolean) {
+  const response = await fetch(url, {
     ...(forceRefresh ? { cache: "no-store" as const } : { next: { revalidate: 600 } }),
     headers: { "User-Agent": "KuangInfoHub/0.1 (+personal news dashboard)" },
     signal: AbortSignal.timeout(7000)
   });
-  if (!response.ok) throw new Error(`${source.name}: ${response.status}`);
-  const parsed = parser.parse(await response.text());
-  const items = arrayOf<Record<string, string>>(parsed?.rss?.channel?.item)
-    .sort((left, right) => +new Date(right.pubDate || 0) - +new Date(left.pubDate || 0))
-    .slice(0, source.limit ?? 8);
+  if (!response.ok) throw new Error(`${url}: ${response.status}`);
+  return response.text();
+}
+
+/** 官網列表沒有日期的文章，改讀文章頁的發布時間；仍找不到就略過，避免顯示錯誤時間。 */
+async function fillArticleDates(entries: SourceEntry[], limit: number) {
+  const filled = await Promise.all(entries.slice(0, limit + 4).map(async (entry) => {
+    if (entry.date) return entry;
+    try {
+      const date = extractArticleDate(await fetchPublicHtml(entry.link, 5000));
+      return date ? { ...entry, date } : null;
+    } catch {
+      return null;
+    }
+  }));
+  return filled.filter((entry): entry is SourceEntry => !!entry);
+}
+
+async function collect(source: Source, forceRefresh = false): Promise<CollectedItem[]> {
+  const text = await fetchSourceText(source.url, forceRefresh).catch((error) => {
+    throw new Error(`${source.name}: ${error instanceof Error ? error.message : error}`);
+  });
+  const limit = source.limit ?? 8;
+  const parsedEntries = source.format === "claude-articles" ? parseClaudeArticles(text, source.url) : parseFeedEntries(text);
+  const withDates = source.format === "claude-articles" ? await fillArticleDates(parsedEntries, limit) : parsedEntries;
+  const items = withDates
+    .sort((left, right) => +new Date(right.date || 0) - +new Date(left.date || 0))
+    .slice(0, limit);
   const [originalDates, arxivDates] = await Promise.all([
-    resolveGoogleNewsDates(items.map((item) => item.link || "")),
-    resolveArxivDates(items, forceRefresh)
+    resolveGoogleNewsDates(items.map((item) => item.link)),
+    resolveArxivDates(items.map((item) => ({ link: item.link })), forceRefresh)
   ]);
   return items.map((item, index) => ({
-    id: createItemId(source, item.link || "", index),
+    id: createItemId(source, item.link, index),
     category: source.category,
     source: source.name,
-    title: cleanTitle(item.title || "未命名情報"),
+    title: `${source.titlePrefix ?? ""}${cleanTitle(item.title || "未命名情報")}`,
     summary: `來自${source.name}的最新內容，點擊前往原始來源閱讀全文。`,
     url: item.link || "#",
-    publishedAt: originalDates.get(item.link || "") ||
-      arxivDates.get(arxivId(item.link || "") || "") ||
-      new Date(item.pubDate || Date.now()).toISOString(),
+    publishedAt: originalDates.get(item.link) ||
+      arxivDates.get(arxivId(item.link) || "") ||
+      new Date(item.date || Date.now()).toISOString(),
     tags: source.tags,
     relevance: Math.max(58, 92 - index * 4),
     reason: `符合你追蹤的「${source.tags[0]}」主題`,
-    excerpt: stripHtml(textOf(item.description ?? item["content:encoded"] ?? ""))
+    excerpt: stripHtml(item.excerpt)
   }));
 }
 
@@ -152,7 +176,7 @@ export async function GET(request: NextRequest) {
   if (aiSummaryEnabled() && live.length) {
     unique.forEach((item) => {
       const excerpt = excerpts.get(item.id) || "";
-      if (item.category === "world" && isMostlyEnglish(item.title, excerpt)) {
+      if ((item.category === "world" || item.category === "aitools") && isMostlyEnglish(item.title, excerpt)) {
         inputs.set(item.id, { id: item.id, title: item.title, url: item.url, source: item.source, excerpt });
       }
     });

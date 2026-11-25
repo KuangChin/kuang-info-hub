@@ -5,7 +5,7 @@ import type { FeedCategory } from "@/lib/types";
 
 export const maxDuration = 60;
 
-const categories = new Set<FeedCategory>(["market", "finance", "world", "nba", "gaming", "social"]);
+const categories = new Set<FeedCategory>(["market", "finance", "world", "aitools", "nba", "gaming", "social"]);
 
 // 粗略的每個伺服器實例速率限制，避免短時間大量呼叫消耗額度。
 const windowMs = 10 * 60 * 1000;
