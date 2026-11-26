@@ -64,12 +64,12 @@ function readClusterStatus(value: unknown): AiClusterStatus | null {
   return { enabled: status.enabled === true, groups: Number(status.groups) || 0, pending: status.pending === true, error: typeof status.error === "string" ? status.error : undefined };
 }
 
-type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; pending: number; failed: number; error?: string };
+type AiSummaryStatus = { enabled: boolean; eligible: number; summarized: number; withKeyPoints: number; titleOnly: number; pending: number; failed: number; error?: string };
 
 function readAiStatus(value: unknown): AiSummaryStatus | null {
   if (!value || typeof value !== "object") return null;
   const status = value as Record<string, unknown>;
-  return { enabled: status.enabled === true, eligible: Number(status.eligible) || 0, summarized: Number(status.summarized) || 0, pending: Number(status.pending) || 0, failed: Number(status.failed) || 0, error: typeof status.error === "string" ? status.error : undefined };
+  return { enabled: status.enabled === true, eligible: Number(status.eligible) || 0, summarized: Number(status.summarized) || 0, withKeyPoints: Number(status.withKeyPoints) || 0, titleOnly: Number(status.titleOnly) || 0, pending: Number(status.pending) || 0, failed: Number(status.failed) || 0, error: typeof status.error === "string" ? status.error : undefined };
 }
 
 function articleTime(date: string, referenceDate: string) {
@@ -119,6 +119,25 @@ function readFeedCache(): FeedCache | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 伺服器重新產生摘要時，新資料可能暫時沒有摘要或只有「僅依標題」的版本。
+ * 這時沿用上次看到的完整摘要，避免已經看得到的重點整理突然消失。
+ */
+function keepAiEnrichment(fresh: FeedItem[], previous: FeedItem[]) {
+  const earlier = new Map(previous.filter((item) => item.aiSummary).map((item) => [item.id, item]));
+  return fresh.map((item) => {
+    const old = earlier.get(item.id);
+    if (!old) return item;
+    const freshIsRicher = item.aiSummary && (item.keyPoints?.length || item.techConcepts?.length || !old.keyPoints?.length && !old.techConcepts?.length);
+    if (freshIsRicher) return item;
+    return {
+      ...item,
+      titleZh: old.titleZh, summary: old.summary, aiSummary: true, summaryBasis: old.summaryBasis,
+      keyPoints: old.keyPoints, techConcepts: old.techConcepts, whyItMatters: old.whyItMatters
+    };
+  });
 }
 
 function writeFeedCache(cache: FeedCache) {
@@ -251,7 +270,8 @@ export default function InfoHub() {
         loadMarket(true)
       ]);
       const data = await response.json();
-      const items = Array.isArray(data.items) && data.items.length ? data.items as FeedItem[] : demoFeed;
+      const freshItems = Array.isArray(data.items) && data.items.length ? data.items as FeedItem[] : demoFeed;
+      const items = keepAiEnrichment(freshItems, [...(readFeedCache()?.items ?? []), ...baseFeed]);
       setBaseFeed(items);
       setMode(data.mode || "demo");
       setSourceCount(Number(data.sourceCount) || 0);
@@ -331,7 +351,8 @@ export default function InfoHub() {
         fetchCustomSources(restoredSources),
         loadMarket()
       ]).then(([data, customItems]) => {
-        const items = Array.isArray(data.items) && data.items.length ? data.items as FeedItem[] : demoFeed;
+        const freshItems = Array.isArray(data.items) && data.items.length ? data.items as FeedItem[] : demoFeed;
+        const items = keepAiEnrichment(freshItems, cached?.items ?? []);
         setBaseFeed(items);
         setMode(data.mode || "demo");
         setSourceCount(Number(data.sourceCount) || 0);
@@ -744,7 +765,7 @@ export default function InfoHub() {
           <div><span>已合併重複／類似新聞</span><strong>{duplicateCount + mergedCount} 則</strong>{clusterStatus?.enabled && <small className="status-note">{clusterStatus.pending ? "AI 正在判斷同一事件…" : clusterStatus.error ? "AI 判斷失敗，僅用標題比對" : `AI 找出 ${clusterStatus.groups} 組同一事件`}</small>}{clusterStatus?.error && <small className="status-error">{clusterStatus.error}</small>}</div>
           <div><span>社群熱門篩選</span><strong className={socialStatus?.enabled && !socialStatus.error ? "good" : "warn"}>{!socialStatus?.enabled ? "未啟用" : socialStatus.pending ? "AI 篩選中…" : socialStatus.error ? "篩選失敗，顯示全部" : `保留 ${socialStatus.kept} 則，濾掉 ${socialStatus.dropped} 則`}</strong>{socialStatus?.error && <small className="status-error">{socialStatus.error}</small>}</div>
           <div><span>偏好回饋</span><strong>{feedbackCount} 篇已學習</strong></div>
-          <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong>{aiStatus?.error && <small className="status-error">{aiStatus.error}</small>}</div>
+          <div><span>AI 英文新聞摘要</span><strong className={aiStatus?.enabled ? (aiStatus.failed ? "warn" : "good") : "warn"}>{!aiStatus ? "尚未取得狀態" : !aiStatus.enabled ? "未設定 API Key" : `已摘要 ${aiStatus.summarized}／${aiStatus.eligible} 篇${aiStatus.pending ? `，${aiStatus.pending} 篇背景處理中` : ""}${aiStatus.failed ? `，${aiStatus.failed} 篇失敗` : ""}`}</strong>{aiStatus?.enabled && aiStatus.summarized > 0 && <small className="status-note">含重點整理 {aiStatus.withKeyPoints} 篇{aiStatus.titleOnly ? ` · 僅依標題 ${aiStatus.titleOnly} 篇（原文網站擋下讀取）` : ""}</small>}{aiStatus?.error && <small className="status-error">{aiStatus.error}</small>}</div>
           <div><span>AI 喜好排序</span><strong className={aiRank.status === "ready" ? "good" : "warn"}>{aiRank.status === "ready" ? `已依 ${aiRank.examples} 則回饋評分 ${Object.keys(aiRank.scores).length} 篇` : aiRank.status === "loading" ? "評分中…" : aiRank.status === "off" ? "未設定 API Key" : aiRank.status === "error" ? "評分失敗" : "先按讚或倒讚幾篇新聞"}</strong>{aiRank.error && <small className="status-error">{aiRank.error}</small>}</div>
           <div><span>市場來源</span><strong className={marketFailedSources.length ? "warn" : "good"}>{marketFailedSources.length ? `異常：${marketFailedSources.join("、")}` : "TWSE、NASDAQ 正常"}</strong></div>
         </div>
