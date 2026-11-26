@@ -101,6 +101,39 @@ const systemPrompt = [
   "不要提到內文缺漏、無法閱讀全文或資訊不足，直接寫能確定的內容。"
 ].join("\n");
 
+/**
+ * 模型偶爾會把清單回成一段文字（JSON 字串或條列文字），這裡統一轉成陣列。
+ */
+function toList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  const text = value.trim();
+  if (!text) return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // 不是合法 JSON，改用條列文字解析。
+    }
+  }
+  return text.split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*•・]|\d+[.)、])\s*/, "").trim())
+    .filter(Boolean);
+}
+
+function toConcept(entry: unknown) {
+  if (typeof entry === "string") {
+    // 「名稱：說明」這種一行文字
+    const match = entry.match(/^([^\n]{2,80}?)[：:]\s*([\s\S]+)$/);
+    return match ? { term: match[1].trim(), explanation: match[2].trim() } : null;
+  }
+  const { term, explanation } = (entry ?? {}) as { term?: unknown; explanation?: unknown };
+  return typeof term === "string" && typeof explanation === "string" && term.trim() && explanation.trim()
+    ? { term: term.trim(), explanation: explanation.trim() }
+    : null;
+}
+
 async function requestSummary(input: SummaryInput): Promise<AiSummary> {
   const result = await callClaudeTool({
     system: systemPrompt,
@@ -113,17 +146,13 @@ async function requestSummary(input: SummaryInput): Promise<AiSummary> {
   // 拋出錯誤而不是回傳空值，避免把失敗結果寫進快取。
   if (!titleZh || !summary) throw new Error("Claude 回應缺少摘要內容");
   const basis = input.excerpt.length >= 300 ? "full" : "title";
-  const strings = (value: unknown, max: number) => (Array.isArray(value) ? value : [])
+  const strings = (value: unknown, max: number) => toList(value)
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => entry.trim())
     .slice(0, max);
-  const techConcepts = (Array.isArray(result.tech_concepts) ? result.tech_concepts : [])
-    .flatMap((entry) => {
-      const { term, explanation } = (entry ?? {}) as { term?: unknown; explanation?: unknown };
-      return typeof term === "string" && typeof explanation === "string" && term.trim() && explanation.trim()
-        ? [{ term: term.trim(), explanation: explanation.trim() }]
-        : [];
-    })
+  const techConcepts = toList(result.tech_concepts)
+    .map(toConcept)
+    .filter((entry): entry is TechConcept => !!entry)
     .slice(0, 3);
   return {
     titleZh,
@@ -166,14 +195,24 @@ async function bestExcerpt(input: SummaryInput) {
   return article.length > input.excerpt.length ? article : input.excerpt;
 }
 
+// 同一篇正在摘要時，其他請求共用同一個結果，避免重複排隊呼叫 Claude。
+const inflight = new Map<string, Promise<AiSummary>>();
+
 export async function summarize(input: SummaryInput): Promise<AiSummary> {
   const trimmed = { ...input, excerpt: (await bestExcerpt(input)).slice(0, maxExcerpt) };
   const key = summaryKey(trimmed);
   const hit = memory.get(key);
   if (hit) return hit;
-  const result = await cachedSummary(key, trimmed);
-  memory.set(key, result);
-  return result;
+  const running = inflight.get(key);
+  if (running) return running;
+  const job = cachedSummary(key, trimmed)
+    .then((result) => {
+      memory.set(key, result);
+      return result;
+    })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, job);
+  return job;
 }
 
 /**
@@ -216,5 +255,14 @@ export async function attachSummaries(items: FeedItem[], inputs: Map<string, Sum
       whyItMatters: summary.whyItMatters || undefined
     } : item;
   });
-  return { items: enriched, summarized: done.size, pending, failed: failed.size, error: lastError };
+  const results = [...done.values()];
+  return {
+    items: enriched,
+    summarized: done.size,
+    withKeyPoints: results.filter((summary) => summary.keyPoints.length || summary.techConcepts.length).length,
+    titleOnly: results.filter((summary) => summary.basis === "title").length,
+    pending,
+    failed: failed.size,
+    error: lastError
+  };
 }

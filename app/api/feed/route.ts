@@ -213,6 +213,8 @@ export async function GET(request: NextRequest) {
       enabled: aiSummaryEnabled(),
       eligible: inputs.size,
       summarized: summarized?.summarized ?? 0,
+      withKeyPoints: summarized?.withKeyPoints ?? 0,
+      titleOnly: summarized?.titleOnly ?? 0,
       pending: summarized?.pending.length ?? 0,
       failed: summarized?.failed ?? 0,
       error: summarized?.error || undefined
